@@ -52,6 +52,18 @@ def run_ocr_for_book(book_id: str) -> dict[str, Any]:
         raise
 
 
+def run_ocr_for_books(book_ids: list[str]) -> dict[str, Any]:
+    completed = 0
+    failures: list[str] = []
+    for book_id in book_ids:
+        try:
+            run_ocr_for_book(book_id)
+            completed += 1
+        except Exception as exc:
+            failures.append(f"{book_id}: {exc}")
+    return {"completed": completed, "failures": failures}
+
+
 def convert_book_format(book_id: str, target_format: str) -> dict[str, Any]:
     book = get_book(book_id)
     path = get_book_path(book_id)
@@ -101,6 +113,20 @@ def convert_book_format(book_id: str, target_format: str) -> dict[str, Any]:
         raise
 
 
+def convert_books(book_ids: list[str], target_format: str) -> dict[str, Any]:
+    completed = 0
+    outputs: list[str] = []
+    failures: list[str] = []
+    for book_id in book_ids:
+        try:
+            result = convert_book_format(book_id, target_format)
+            outputs.append(result.get("output", ""))
+            completed += 1
+        except Exception as exc:
+            failures.append(f"{book_id}: {exc}")
+    return {"completed": completed, "outputs": outputs, "failures": failures}
+
+
 def repair_book_file(book_id: str) -> dict[str, Any]:
     path = get_book_path(book_id)
     if not path:
@@ -129,10 +155,35 @@ def repair_book_file(book_id: str) -> dict[str, Any]:
 
 
 def export_library_web_preview() -> Path:
+    companion_dir = LIBRARY_DIR / "companion"
     payload = {
         "generated_at": str(Path.cwd()),
         "index": "Use companion/library_feed.json as a simple browser-facing payload.",
     }
-    path = LIBRARY_DIR / "companion" / "web_preview.json"
-    path.write_text(json.dumps(payload, indent=2))
-    return path
+    json_path = companion_dir / "web_preview.json"
+    json_path.write_text(json.dumps(payload, indent=2))
+    html_path = companion_dir / "index.html"
+    html_path.write_text(
+        """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoBook Companion</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0b1220; color:#e5eef9; margin:0; padding:32px; }
+    .card { background:#162033; border:1px solid #273449; border-radius:18px; padding:20px; max-width:960px; margin:0 auto; }
+    a { color:#7db0ff; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>AutoBook Companion</h1>
+    <p>Open <code>library_feed.json</code> from the same folder to inspect the exported catalog payload.</p>
+  </div>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+    return html_path

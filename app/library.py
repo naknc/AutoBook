@@ -49,7 +49,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "search_cache_max_age_hours": 72,
     "queue_autostart": True,
     "active_device_profile": "Default",
-    "device_profiles": [{"name": "Default", "subdir": "", "kind": "Generic"}],
+    "device_profiles": [{"name": "Default", "subdir": "", "kind": "Generic", "preferred_format": "Any", "auto_send": False}],
+    "workspace_role": "Admin",
+    "allowed_actions": ["download", "transfer", "ocr", "convert", "ai"],
 }
 
 
@@ -531,21 +533,39 @@ def get_device_profiles() -> list[dict[str, str]]:
         if not isinstance(item, dict):
             continue
         name = str(item.get("name", "")).strip() or "Profile"
-        cleaned.append({"name": name, "subdir": str(item.get("subdir", "")).strip(), "kind": str(item.get("kind", "Generic")).strip() or "Generic"})
-    return cleaned or [{"name": "Default", "subdir": "", "kind": "Generic"}]
+        cleaned.append(
+            {
+                "name": name,
+                "subdir": str(item.get("subdir", "")).strip(),
+                "kind": str(item.get("kind", "Generic")).strip() or "Generic",
+                "preferred_format": str(item.get("preferred_format", "Any")).strip() or "Any",
+                "auto_send": bool(item.get("auto_send", False)),
+            }
+        )
+    return cleaned or [{"name": "Default", "subdir": "", "kind": "Generic", "preferred_format": "Any", "auto_send": False}]
 
 
-def save_device_profile(name: str, subdir: str = "", kind: str = "Generic") -> list[dict[str, str]]:
+def save_device_profile(name: str, subdir: str = "", kind: str = "Generic", preferred_format: str = "Any", auto_send: bool = False) -> list[dict[str, str]]:
     profiles = get_device_profiles()
     updated = False
     for profile in profiles:
         if profile["name"] == name:
             profile["subdir"] = subdir.strip()
             profile["kind"] = kind.strip() or "Generic"
+            profile["preferred_format"] = preferred_format.strip() or "Any"
+            profile["auto_send"] = bool(auto_send)
             updated = True
             break
     if not updated:
-        profiles.append({"name": name.strip() or "Profile", "subdir": subdir.strip(), "kind": kind.strip() or "Generic"})
+        profiles.append(
+            {
+                "name": name.strip() or "Profile",
+                "subdir": subdir.strip(),
+                "kind": kind.strip() or "Generic",
+                "preferred_format": preferred_format.strip() or "Any",
+                "auto_send": bool(auto_send),
+            }
+        )
     update_settings(device_profiles=profiles)
     return profiles
 
@@ -582,9 +602,26 @@ def list_local_plugins() -> list[dict[str, str]]:
                 "version": str(payload.get("version", "0.1.0")),
                 "description": str(payload.get("description", "")),
                 "path": str(path.relative_to(BASE_DIR)),
+                "enabled": "true" if bool(payload.get("enabled", True)) else "false",
             }
         )
     return plugins
+
+
+def toggle_plugin_enabled(path_str: str) -> dict[str, str] | None:
+    path = BASE_DIR / path_str
+    payload = _read_json(path, {})
+    if not isinstance(payload, dict):
+        return None
+    payload["enabled"] = not bool(payload.get("enabled", True))
+    _write_json(path, payload)
+    return {
+        "name": str(payload.get("name", path.stem)),
+        "version": str(payload.get("version", "0.1.0")),
+        "description": str(payload.get("description", "")),
+        "path": str(path.relative_to(BASE_DIR)),
+        "enabled": "true" if bool(payload.get("enabled", True)) else "false",
+    }
 
 
 def generate_companion_feed() -> Path:

@@ -4,7 +4,7 @@
   "device_subdir": "",
   "default_collection": "",
   "open_library_after_download": true,
-  "library_view": "Grid",
+  "library_view": "List",
   "auto_organize_by": "None",
   "theme_preset": "Corporate Blue",
   "notifications_enabled": true,
@@ -27,7 +27,17 @@
     {
       "name": "Default",
       "subdir": "",
-      "kind": "Generic"
+      "kind": "Generic",
+      "preferred_format": "Any",
+      "auto_send": false
     }
+  ],
+  "workspace_role": "Admin",
+  "allowed_actions": [
+    "download",
+    "transfer",
+    "ocr",
+    "convert",
+    "ai"
   ]
 }

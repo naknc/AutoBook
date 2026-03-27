@@ -268,3 +268,35 @@ Traceback (most recent call last):
 requests.exceptions.ConnectionError: HTTPSConnectionPool(host='openlibrary.org', port=443): Max retries exceeded with url: /search.json?q=animal+farm&language=eng&limit=24&sort=rating&fields=key%2Ctitle%2Cauthor_name%2Cfirst_publish_year%2Ccover_i%2Cia%2Cratings_average%2Cratings_count%2Csubject%2Cfirst_sentence (Caused by NameResolutionError("HTTPSConnection(host='openlibrary.org', port=443): Failed to resolve 'openlibrary.org' ([Errno 8] nodename nor servname provided, or not known)"))
 2026-03-27 22:39:19,806 | INFO | MainThread | Logging initialized
 2026-03-27 22:58:53,558 | INFO | MainThread | Logging initialized
+2026-03-27 23:18:19,769 | INFO | MainThread | Logging initialized
+2026-03-27 23:19:05,065 | ERROR | autobook-worker | Format conversion failed for book_id='afe43208' target='pdf'
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/document_tools.py", line 94, in convert_book_format
+    else:
+    
+RuntimeError: [66819:259:0327/231904.053895:ERROR:service_utils.cc(339)] Skia Graphite backend = "" not found - falling back to Ganesh!
+[66819:259:0327/231904.054868:ERROR:service_utils.cc(339)] Skia Graphite backend = "" not found - falling back to Ganesh!
+2026-03-27 23:19:05,066 | ERROR | autobook-worker | Conversion failed.
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/main.py", line 782, in _runner
+    try:
+    
+  File "/Users/nihosh/Projects/AutoBook_nihos/main.py", line 1748, in _work
+    def _work() -> dict[str, Any]:
+               ^^^^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/document_tools.py", line 94, in convert_book_format
+    else:
+    
+RuntimeError: [66819:259:0327/231904.053895:ERROR:service_utils.cc(339)] Skia Graphite backend = "" not found - falling back to Ganesh!
+[66819:259:0327/231904.054868:ERROR:service_utils.cc(339)] Skia Graphite backend = "" not found - falling back to Ganesh!
+2026-03-27 23:21:12,819 | ERROR | autobook-worker | OCR failed.
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/main.py", line 782, in _runner
+    ) -> None:
+    
+  File "/Users/nihosh/Projects/AutoBook_nihos/main.py", line 1729, in _work
+    log_info(f"Bulk delete count={count}")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/document_tools.py", line 29, in run_ocr_for_book
+    raise ValueError("OCR is currently available for PDF files only.")
+ValueError: OCR is currently available for PDF files only.

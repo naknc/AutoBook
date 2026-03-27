@@ -18,7 +18,7 @@ import requests
 from PIL import Image
 
 from app.devices import copy_to_device, detect_devices
-from app.document_tools import convert_book_format, export_library_web_preview, repair_book_file, run_ocr_for_book
+from app.document_tools import convert_book_format, convert_books, export_library_web_preview, repair_book_file, run_ocr_for_book, run_ocr_for_books
 from app.library import (
     LIBRARY_DIR,
     add_to_library,
@@ -68,8 +68,9 @@ from app.library import (
     update_download_job,
     update_settings,
     delete_device_profile,
+    toggle_plugin_enabled,
 )
-from app.ai_tools import ai_enrich_book, ai_is_configured
+from app.ai_tools import ai_enrich_book, ai_generate_search_suggestions, ai_generate_tags, ai_is_configured
 from app.logging_utils import LOG_FILE, log_exception, log_info, setup_logging
 from app.search import BookResult, book_result_from_dict, book_result_to_dict, download_link_from_dict, resolve_external_download, search_books
 
@@ -444,6 +445,12 @@ class AutoBookApp(ctk.CTk):
         if not isinstance(formats, list):
             return {"EPUB", "PDF"}
         return {str(item).upper() for item in formats}
+
+    def _action_allowed(self, action: str) -> bool:
+        allowed = self.settings.get("allowed_actions", ["download", "transfer", "ocr", "convert", "ai"])
+        if not isinstance(allowed, list):
+            return True
+        return action in allowed
 
     def _active_device_profile(self) -> dict[str, str]:
         active = self.settings.get("active_device_profile", "Default")
@@ -867,6 +874,19 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             command=self._toggle_search_filters,
         ).pack(side="left")
+        ctk.CTkButton(
+            toolbar_row,
+            text="AI Suggestions",
+            width=126,
+            height=32,
+            corner_radius=12,
+            fg_color=_SURFACE_ALT,
+            hover_color=_CARD_BG,
+            border_width=1,
+            border_color=_CARD_BORDER,
+            text_color=_TEXT,
+            command=self._show_ai_search_suggestions,
+        ).pack(side="left", padx=(8, 0))
         self.search_context_label = ctk.CTkLabel(
             toolbar_row,
             text="Source: all  |  Format: any  |  Sort: relevance",
@@ -958,6 +978,39 @@ class AutoBookApp(ctk.CTk):
             justify="left",
             wraplength=840,
         ).pack(anchor="w", padx=24, pady=(0, 22))
+
+    def _show_ai_search_suggestions(self) -> None:
+        if not ai_is_configured():
+            self._set_status("OPENAI_API_KEY is not configured for AI search suggestions.")
+            return
+        query = self.search_entry.get().strip() if hasattr(self, "search_entry") else ""
+        if not query:
+            self._set_status("Enter a query first to request AI suggestions.")
+            return
+        suggestions = ai_generate_search_suggestions(query)
+        if not suggestions:
+            self._set_status("No AI suggestions were generated.")
+            return
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("AI Search Suggestions")
+        dialog.geometry("520x320")
+        dialog.configure(fg_color=_SURFACE)
+        dialog.transient(self)
+        dialog.grab_set()
+        ctk.CTkLabel(dialog, text="AI Search Suggestions", font=ctk.CTkFont(size=20, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=20, pady=(18, 8))
+        for suggestion in suggestions:
+            ctk.CTkButton(
+                dialog,
+                text=suggestion,
+                height=38,
+                fg_color=_CARD_BG,
+                hover_color=_SURFACE_ALT,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                corner_radius=12,
+                text_color=_TEXT,
+                command=lambda value=suggestion: (self.search_entry.delete(0, "end"), self.search_entry.insert(0, value), dialog.destroy()),
+            ).pack(fill="x", padx=20, pady=5)
 
     def _do_search(self) -> None:
         query = self.search_entry.get().strip()
@@ -1133,6 +1186,9 @@ class AutoBookApp(ctk.CTk):
 
     def _download_book(self, selected_link: Any, book: BookResult) -> None:
         self._refresh_settings_cache()
+        if not self._action_allowed("download"):
+            self._set_status("Downloads are disabled by workspace policy.")
+            return
         if book.source and book.source not in self.settings.get("allowed_sources", []):
             self._set_status(f"{book.source} is disabled by source access control.")
             return
@@ -1146,9 +1202,16 @@ class AutoBookApp(ctk.CTk):
             return self._execute_download_job(selected_link, book)
 
         def _done(_result: tuple[str, str]) -> None:
-            _, message = _result
+            filename, message = _result
             self._set_status(message)
             self._notify("AutoBook", message)
+            profile = self._active_device_profile()
+            if profile.get("auto_send"):
+                matches = [device for device in detect_devices() if profile.get("kind", "Generic") in {"Generic", device.kind, device.name}]
+                if len(matches) == 1:
+                    book_entry = next((item for item in get_all_books() if item.get("filename") == filename), None)
+                    if book_entry:
+                        self._do_transfer(book_entry, matches[0])
             if self.settings.get("open_library_after_download", True):
                 self._show_library()
 
@@ -1258,6 +1321,8 @@ class AutoBookApp(ctk.CTk):
         ctk.CTkButton(bulk_row, text="Favorite Selected", width=138, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_mark_favorite).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Set Reading", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_set_reading).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Add Collection", width=122, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_add_collection).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text="Batch OCR", width=106, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_run_ocr).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text="Batch Convert", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_convert_books).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Remove Selected", width=132, height=34, fg_color=_DANGER, hover_color=_DANGER_HOVER, text_color=_TEXT, command=self._bulk_remove_books).pack(side="left")
         self.library_bulk_row.pack_forget()
 
@@ -1475,6 +1540,7 @@ class AutoBookApp(ctk.CTk):
             (self._t("Run OCR"), lambda b=book: self._run_book_ocr(b["id"]), _SURFACE_ALT, _CARD_BG),
             (self._t("Convert"), lambda b=book: self._convert_book(b["id"]), _SURFACE_ALT, _CARD_BG),
             (self._t("AI Enrich"), lambda b=book: self._ai_enrich_book(b["id"]), _SURFACE_ALT, _CARD_BG),
+            ("AI Tags", lambda b=book: self._ai_generate_tags_for_book(b["id"]), _SURFACE_ALT, _CARD_BG),
             (self._t("Remove"), lambda b=book: self._delete_book(b), _DANGER, _DANGER_HOVER),
         ]:
             ctk.CTkButton(
@@ -1629,6 +1695,41 @@ class AutoBookApp(ctk.CTk):
             log_exception("Bulk collection update failed")
             self._set_status("Bulk collection update failed. Check the log for details.")
 
+    def _bulk_run_ocr(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        self._set_status("Running batch OCR...")
+
+        def _work() -> dict[str, Any]:
+            return run_ocr_for_books(list(self.selected_book_ids))
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("bulk_ocr", completed=result.get("completed", 0))
+            self._set_status(f'Batch OCR finished. {result.get("completed", 0)} completed, {len(result.get("failures", []))} failed.')
+            self._refresh_library_results()
+
+        self._run_background(_work, _done, user_error="Batch OCR failed.")
+
+    def _bulk_convert_books(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        dialog = ctk.CTkInputDialog(text="Target format for selected books: epub, pdf, or txt", title="Batch Convert")
+        target = (dialog.get_input() or "").strip().lower()
+        if not target:
+            return
+        self._set_status(f"Running batch conversion to {target.upper()}...")
+
+        def _work() -> dict[str, Any]:
+            return convert_books(list(self.selected_book_ids), target)
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("bulk_convert", completed=result.get("completed", 0), format=target.upper())
+            self._set_status(f'Batch conversion finished. {result.get("completed", 0)} completed, {len(result.get("failures", []))} failed.')
+
+        self._run_background(_work, _done, user_error="Batch conversion failed.")
+
     def _bulk_remove_books(self) -> None:
         if not self.selected_book_ids:
             self._set_status("Select at least one book in bulk mode.")
@@ -1722,6 +1823,9 @@ class AutoBookApp(ctk.CTk):
             self._set_status(f"Repair failed: {exc}")
 
     def _run_book_ocr(self, book_id: str) -> None:
+        if not self._action_allowed("ocr"):
+            self._set_status("OCR is disabled by workspace policy.")
+            return
         self._set_status("Running OCR...")
         self.update_idletasks()
 
@@ -1737,6 +1841,9 @@ class AutoBookApp(ctk.CTk):
         self._run_background(_work, _done, user_error="OCR failed.")
 
     def _convert_book(self, book_id: str) -> None:
+        if not self._action_allowed("convert"):
+            self._set_status("Conversion is disabled by workspace policy.")
+            return
         dialog = ctk.CTkInputDialog(text="Target format: epub, pdf, or txt", title="Convert Book")
         target = (dialog.get_input() or "").strip().lower()
         if not target:
@@ -1755,6 +1862,9 @@ class AutoBookApp(ctk.CTk):
         self._run_background(_work, _done, user_error="Conversion failed.")
 
     def _ai_enrich_book(self, book_id: str) -> None:
+        if not self._action_allowed("ai"):
+            self._set_status("AI actions are disabled by workspace policy.")
+            return
         if not ai_is_configured():
             self._set_status("OPENAI_API_KEY is not configured for AI enrichment.")
             return
@@ -1770,6 +1880,24 @@ class AutoBookApp(ctk.CTk):
             self._refresh_library_results()
 
         self._run_background(_work, _done, user_error="AI enrichment failed.")
+
+    def _ai_generate_tags_for_book(self, book_id: str) -> None:
+        if not self._action_allowed("ai"):
+            self._set_status("AI actions are disabled by workspace policy.")
+            return
+        if not ai_is_configured():
+            self._set_status("OPENAI_API_KEY is not configured for AI tag generation.")
+            return
+
+        def _work() -> dict[str, Any]:
+            return ai_generate_tags(book_id)
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("ai_tags", book_id=book_id)
+            self._set_status(f'AI tags updated: {", ".join(result.get("tags", []))}')
+            self._refresh_library_results()
+
+        self._run_background(_work, _done, user_error="AI tag generation failed.")
 
     # History page
 
@@ -1795,7 +1923,12 @@ class AutoBookApp(ctk.CTk):
                 row = ctk.CTkFrame(queue_panel, fg_color="transparent")
                 row.pack(fill="x", padx=18, pady=4)
                 title = item.get("book", {}).get("title", "Queued title") if isinstance(item.get("book"), dict) else "Queued title"
-                ctk.CTkLabel(row, text=f"{title}  |  {item.get('link', {}).get('format', '').upper()}", font=ctk.CTkFont(size=12), text_color=_TEXT).pack(side="left")
+                left = ctk.CTkFrame(row, fg_color="transparent")
+                left.pack(side="left", fill="x", expand=True)
+                ctk.CTkLabel(left, text=f"{title}  |  {item.get('link', {}).get('format', '').upper()}", font=ctk.CTkFont(size=12), text_color=_TEXT).pack(anchor="w")
+                progress = ctk.CTkProgressBar(left, progress_color=_ACCENT, fg_color=_CARD_BG)
+                progress.pack(fill="x", pady=(6, 0), padx=(0, 14))
+                progress.set({"queued": 0.2, "running": 0.65, "success": 1.0, "failed": 1.0, "cancelled": 1.0}.get(item.get("status", "queued"), 0.2))
                 controls = ctk.CTkFrame(row, fg_color="transparent")
                 controls.pack(side="right")
                 ctk.CTkButton(controls, text="Up", width=42, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_reorder(job_id, "up")).pack(side="left", padx=(6, 0))
@@ -2002,6 +2135,9 @@ class AutoBookApp(ctk.CTk):
     # Transfer helpers
 
     def _send_to_device(self, book: dict[str, Any]) -> None:
+        if not self._action_allowed("transfer"):
+            self._set_status("Transfers are disabled by workspace policy.")
+            return
         devices = detect_devices()
         if not devices:
             self._set_status("No device detected. Open the Devices section to troubleshoot the connection.")
@@ -2081,6 +2217,13 @@ class AutoBookApp(ctk.CTk):
         self.settings_cache_var = tk.BooleanVar(value=bool(self.settings.get("search_cache_enabled", True)))
         self.settings_queue_autostart_var = tk.BooleanVar(value=bool(self.settings.get("queue_autostart", True)))
         self.settings_cache_age_var = tk.StringVar(value=str(self.settings.get("search_cache_max_age_hours", 72)))
+        self.settings_role_var = tk.StringVar(value=self.settings.get("workspace_role", "Admin"))
+        allowed_actions = set(self.settings.get("allowed_actions", ["download", "transfer", "ocr", "convert", "ai"]))
+        self.action_download_var = tk.BooleanVar(value="download" in allowed_actions)
+        self.action_transfer_var = tk.BooleanVar(value="transfer" in allowed_actions)
+        self.action_ocr_var = tk.BooleanVar(value="ocr" in allowed_actions)
+        self.action_convert_var = tk.BooleanVar(value="convert" in allowed_actions)
+        self.action_ai_var = tk.BooleanVar(value="ai" in allowed_actions)
         active_formats = set(self.settings.get("allowed_formats", ["EPUB", "PDF"]))
         self.allow_epub_var = tk.BooleanVar(value="EPUB" in active_formats)
         self.allow_pdf_var = tk.BooleanVar(value="PDF" in active_formats)
@@ -2177,6 +2320,18 @@ class AutoBookApp(ctk.CTk):
             border_color=_CARD_BORDER,
             text_color=_TEXT,
         ))
+        self._make_settings_field(form, 4, 0, "Workspace role", ctk.CTkOptionMenu(
+            form,
+            values=["Admin", "Operator", "Viewer"],
+            variable=self.settings_role_var,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ))
 
         toggles = ctk.CTkFrame(panel, fg_color="transparent")
         toggles.pack(fill="x", padx=18, pady=(0, 12))
@@ -2262,6 +2417,28 @@ class AutoBookApp(ctk.CTk):
                 border_color=_CARD_BORDER,
             ).pack(side="left", padx=(0, 14))
 
+        policy_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
+        policy_panel.pack(fill="x", padx=18, pady=(0, 12))
+        ctk.CTkLabel(policy_panel, text="Allowed actions", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        policy_row = ctk.CTkFrame(policy_panel, fg_color="transparent")
+        policy_row.pack(fill="x", padx=14, pady=(0, 12))
+        for text, var in [
+            ("Download", self.action_download_var),
+            ("Transfer", self.action_transfer_var),
+            ("OCR", self.action_ocr_var),
+            ("Convert", self.action_convert_var),
+            ("AI", self.action_ai_var),
+        ]:
+            ctk.CTkCheckBox(
+                policy_row,
+                text=text,
+                variable=var,
+                text_color=_TEXT,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                border_color=_CARD_BORDER,
+            ).pack(side="left", padx=(0, 14))
+
         profile_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         profile_panel.pack(fill="x", padx=18, pady=(0, 12))
         top = ctk.CTkFrame(profile_panel, fg_color="transparent")
@@ -2281,7 +2458,7 @@ class AutoBookApp(ctk.CTk):
             dropdown_text_color=_TEXT,
         ).pack(side="right")
         active_profile = self._active_device_profile()
-        ctk.CTkLabel(profile_panel, text=f"Active profile subfolder: {active_profile.get('subdir', '-') or '-'}  |  Kind: {active_profile.get('kind', 'Generic')}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 10))
+        ctk.CTkLabel(profile_panel, text=f"Active profile subfolder: {active_profile.get('subdir', '-') or '-'}  |  Kind: {active_profile.get('kind', 'Generic')}  |  Format: {active_profile.get('preferred_format', 'Any')}  |  Auto-send: {'On' if active_profile.get('auto_send') else 'Off'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 10))
         action_profile = ctk.CTkFrame(profile_panel, fg_color="transparent")
         action_profile.pack(fill="x", padx=14, pady=(0, 12))
         ctk.CTkButton(action_profile, text="Add Profile", width=112, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._add_device_profile).pack(side="left")
@@ -2297,8 +2474,12 @@ class AutoBookApp(ctk.CTk):
         ctk.CTkLabel(diagnostics_panel, text=f"AI provider: {'Configured' if ai_is_configured() else 'Missing OPENAI_API_KEY'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
         ctk.CTkLabel(diagnostics_panel, text=f"Offline cache: {cache_stats['entries']} entries  |  {cache_stats['bytes']} bytes", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
         ctk.CTkLabel(diagnostics_panel, text=f"Local plugins: {len(plugins)}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
-        for plugin in plugins[:4]:
-            ctk.CTkLabel(diagnostics_panel, text=f"{plugin['name']} {plugin['version']}  |  {plugin['description']}", font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", padx=14, pady=2)
+        for plugin in plugins[:6]:
+            row = ctk.CTkFrame(diagnostics_panel, fg_color="transparent")
+            row.pack(fill="x", padx=14, pady=2)
+            status_text = "enabled" if plugin.get("enabled") == "true" else "disabled"
+            ctk.CTkLabel(row, text=f"{plugin['name']} {plugin['version']}  |  {status_text}  |  {plugin['description']}", font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(side="left")
+            ctk.CTkButton(row, text="Toggle", width=72, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=10, text_color=_TEXT, command=lambda plugin_path=plugin["path"]: self._toggle_plugin(plugin_path)).pack(side="right")
         diag_actions = ctk.CTkFrame(diagnostics_panel, fg_color="transparent")
         diag_actions.pack(fill="x", padx=14, pady=(8, 12))
         ctk.CTkButton(diag_actions, text="Clear Cache", width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
@@ -2365,6 +2546,8 @@ class AutoBookApp(ctk.CTk):
                 search_cache_enabled=bool(self.settings_cache_var.get()),
                 search_cache_max_age_hours=max(1, int(self.settings_cache_age_var.get() or "72")),
                 queue_autostart=bool(self.settings_queue_autostart_var.get()),
+                workspace_role=self.settings_role_var.get(),
+                allowed_actions=self._selected_allowed_actions(),
                 active_device_profile=self.settings_profile_var.get(),
                 allowed_formats=self._selected_allowed_formats(),
                 allowed_sources=self._selected_allowed_sources(),
@@ -2396,6 +2579,20 @@ class AutoBookApp(ctk.CTk):
         if self.allow_pdf_var.get():
             allowed.append("PDF")
         return allowed or ["EPUB"]
+
+    def _selected_allowed_actions(self) -> list[str]:
+        actions = []
+        if self.action_download_var.get():
+            actions.append("download")
+        if self.action_transfer_var.get():
+            actions.append("transfer")
+        if self.action_ocr_var.get():
+            actions.append("ocr")
+        if self.action_convert_var.get():
+            actions.append("convert")
+        if self.action_ai_var.get():
+            actions.append("ai")
+        return actions or ["download"]
 
     def _export_snapshot(self) -> None:
         try:
@@ -2436,6 +2633,16 @@ class AutoBookApp(ctk.CTk):
         except Exception:
             log_exception("Offline cache cleanup failed")
             self._set_status("Offline cache cleanup failed.")
+
+    def _toggle_plugin(self, plugin_path: str) -> None:
+        try:
+            plugin = toggle_plugin_enabled(plugin_path)
+            self._track("plugin_toggled", plugin=plugin_path)
+            self._set_status(f'Plugin updated: {plugin.get("name", plugin_path) if plugin else plugin_path}')
+            self._show_settings()
+        except Exception:
+            log_exception("Plugin toggle failed")
+            self._set_status("Plugin toggle failed.")
 
     def _import_snapshot(self) -> None:
         dialog = ctk.CTkInputDialog(text="Enter the full path to an export JSON file.", title="Import Snapshot")
@@ -2484,8 +2691,10 @@ class AutoBookApp(ctk.CTk):
             return
         subdir = ctk.CTkInputDialog(text="Default subfolder", title="Add Device Profile").get_input() or ""
         kind = ctk.CTkInputDialog(text="Device kind label", title="Add Device Profile").get_input() or "Generic"
+        preferred_format = ctk.CTkInputDialog(text="Preferred format for this profile: Any, EPUB, or PDF", title="Add Device Profile").get_input() or "Any"
+        auto_send = (ctk.CTkInputDialog(text="Auto-send after download? yes/no", title="Add Device Profile").get_input() or "no").strip().lower() in {"y", "yes", "true", "1"}
         try:
-            save_device_profile(name.strip(), subdir.strip(), kind.strip())
+            save_device_profile(name.strip(), subdir.strip(), kind.strip(), preferred_format.strip().upper() if preferred_format.strip().lower() != "any" else "Any", auto_send)
             self._track("device_profile_saved", name=name.strip())
             self._show_settings()
             self._set_status(f'Profile "{name.strip()}" saved.')

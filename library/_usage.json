@@ -1,5 +1,119 @@
 [
   {
+    "id": "3d09dec7",
+    "timestamp": "2026-03-27T23:22:12",
+    "event": "view_search",
+    "details": {}
+  },
+  {
+    "id": "1708ac87",
+    "timestamp": "2026-03-27T23:22:11",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "12a369ce",
+    "timestamp": "2026-03-27T23:22:08",
+    "event": "view_settings",
+    "details": {}
+  },
+  {
+    "id": "3157a173",
+    "timestamp": "2026-03-27T23:22:06",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "ce235420",
+    "timestamp": "2026-03-27T23:21:37",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "5687554e",
+    "timestamp": "2026-03-27T23:21:35",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "11b3d90f",
+    "timestamp": "2026-03-27T23:21:01",
+    "event": "book_repaired",
+    "details": {
+      "book_id": "afe43208",
+      "status": "healthy"
+    }
+  },
+  {
+    "id": "5602dc5e",
+    "timestamp": "2026-03-27T23:20:03",
+    "event": "book_converted",
+    "details": {
+      "book_id": "afe43208",
+      "format": "PDF"
+    }
+  },
+  {
+    "id": "32f0f893",
+    "timestamp": "2026-03-27T23:18:41",
+    "event": "view_settings",
+    "details": {}
+  },
+  {
+    "id": "80dc66f7",
+    "timestamp": "2026-03-27T23:18:39",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "bd0b0944",
+    "timestamp": "2026-03-27T23:18:38",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "1924cf38",
+    "timestamp": "2026-03-27T23:18:37",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "833107c8",
+    "timestamp": "2026-03-27T23:18:36",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "12dc4489",
+    "timestamp": "2026-03-27T23:18:35",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "cb3efa60",
+    "timestamp": "2026-03-27T23:18:30",
+    "event": "view_search",
+    "details": {}
+  },
+  {
+    "id": "69d9abe1",
+    "timestamp": "2026-03-27T23:18:25",
+    "event": "view_search",
+    "details": {}
+  },
+  {
+    "id": "bd270c4f",
+    "timestamp": "2026-03-27T23:18:24",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "51766b4a",
+    "timestamp": "2026-03-27T23:18:19",
+    "event": "view_search",
+    "details": {}
+  },
+  {
     "id": "d0666a9b",
     "timestamp": "2026-03-27T23:00:44",
     "event": "view_devices",
