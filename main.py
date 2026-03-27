@@ -19,6 +19,7 @@ from PIL import Image
 
 from app.devices import copy_to_device, detect_devices
 from app.document_tools import convert_book_format, convert_books, export_library_web_preview, repair_book_file, run_ocr_for_book, run_ocr_for_books
+from app.web_companion import start_server as start_web_companion_server
 from app.library import (
     LIBRARY_DIR,
     add_to_library,
@@ -183,6 +184,7 @@ _I18N = {
         "Companion Feed": "Companion Feed",
         "Clear Cache": "Clear Cache",
         "Web Preview": "Web Preview",
+        "Launch Web App": "Launch Web App",
         "Import Plugin": "Import Plugin",
         "Add Profile": "Add Profile",
         "Delete Profile": "Delete Profile",
@@ -247,6 +249,7 @@ _I18N = {
         "Companion Feed": "Companion Feed",
         "Clear Cache": "Önbelleği Temizle",
         "Web Preview": "Web Önizleme",
+        "Launch Web App": "Web Uygulamasını Başlat",
         "Import Plugin": "Plugin İçe Aktar",
         "Add Profile": "Profil Ekle",
         "Delete Profile": "Profili Sil",
@@ -2598,6 +2601,7 @@ class AutoBookApp(ctk.CTk):
         diag_actions.pack(fill="x", padx=14, pady=(8, 12))
         ctk.CTkButton(diag_actions, text=self._t("Clear Cache"), width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
         ctk.CTkButton(diag_actions, text=self._t("Web Preview"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._generate_web_preview).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(diag_actions, text=self._t("Launch Web App"), width=132, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._launch_web_app).pack(side="left", padx=(10, 0))
         ctk.CTkButton(diag_actions, text=self._t("Import Plugin"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._import_plugin).pack(side="left", padx=(10, 0))
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
@@ -2738,6 +2742,15 @@ class AutoBookApp(ctk.CTk):
         except Exception:
             log_exception("Web preview generation failed")
             self._set_status("Web preview generation failed. Check the log for details.")
+
+    def _launch_web_app(self) -> None:
+        try:
+            url = start_web_companion_server()
+            self._track("web_app_launched", url=url)
+            self._set_status(f"Web app started at {url}")
+        except Exception:
+            log_exception("Web app launch failed")
+            self._set_status("Web app launch failed. Check the log for details.")
 
     def _clear_offline_cache(self) -> None:
         try:

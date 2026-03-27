@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoBook Web Companion</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <h1>AutoBook</h1>
+      <p>Local web workspace</p>
+      <nav>
+        <button data-view="library" class="active">Library</button>
+        <button data-view="analytics">Analytics</button>
+        <button data-view="history">History</button>
+        <button data-view="devices">Transfers</button>
+      </nav>
+    </aside>
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <h2 id="view-title">Library</h2>
+          <p id="view-subtitle">Browse the local AutoBook catalog.</p>
+        </div>
+        <input id="search" type="search" placeholder="Search local library">
+      </header>
+      <section id="stats" class="stats"></section>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
