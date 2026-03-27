@@ -15,6 +15,7 @@ LIBRARY_DIR.mkdir(exist_ok=True)
 METADATA_FILE = LIBRARY_DIR / "_metadata.json"
 SETTINGS_FILE = LIBRARY_DIR / "_settings.json"
 HISTORY_FILE = LIBRARY_DIR / "_history.json"
+TRANSFER_HISTORY_FILE = LIBRARY_DIR / "_transfer_history.json"
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "preferred_format": "Any",
@@ -22,6 +23,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "device_subdir": "",
     "default_collection": "",
     "open_library_after_download": True,
+    "library_view": "List",
 }
 
 
@@ -49,6 +51,9 @@ def _normalise_book(entry: dict[str, Any]) -> dict[str, Any]:
     subjects = entry.get("subjects", [])
     if not isinstance(subjects, list):
         subjects = []
+    tags = entry.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
 
     normalized = {
         "id": entry.get("id") or str(uuid.uuid4())[:8],
@@ -67,6 +72,8 @@ def _normalise_book(entry: dict[str, Any]) -> dict[str, Any]:
         "favorite": bool(entry.get("favorite", False)),
         "collections": sorted({str(item).strip() for item in collections if str(item).strip()}),
         "notes": entry.get("notes", ""),
+        "reading_status": entry.get("reading_status", "Unread"),
+        "tags": sorted({str(item).strip() for item in tags if str(item).strip()}),
         "downloaded_at": entry.get("downloaded_at") or _now_iso(),
         "updated_at": entry.get("updated_at") or entry.get("downloaded_at") or _now_iso(),
     }
@@ -111,8 +118,10 @@ def search_books_in_library(
                 book.get("title", ""),
                 book.get("author", ""),
                 book.get("description", ""),
+                book.get("notes", ""),
                 " ".join(book.get("subjects", [])),
                 " ".join(book.get("collections", [])),
+                " ".join(book.get("tags", [])),
             ]
         ).lower()
         if query_norm and query_norm not in haystack:
@@ -146,6 +155,9 @@ def add_to_library(
     subjects: list[str] | None = None,
     favorite: bool = False,
     collections: list[str] | None = None,
+    reading_status: str = "Unread",
+    tags: list[str] | None = None,
+    notes: str = "",
 ) -> dict[str, Any]:
     metadata = _load_metadata()
     entry = _normalise_book(
@@ -165,6 +177,9 @@ def add_to_library(
             "subjects": subjects or [],
             "favorite": favorite,
             "collections": collections or [],
+            "reading_status": reading_status,
+            "tags": tags or [],
+            "notes": notes,
             "downloaded_at": _now_iso(),
             "updated_at": _now_iso(),
         }
@@ -208,6 +223,58 @@ def list_collections() -> list[str]:
     for book in _load_metadata():
         names.update(book.get("collections", []))
     return sorted(names)
+
+
+def list_tags() -> list[str]:
+    names: set[str] = set()
+    for book in _load_metadata():
+        names.update(book.get("tags", []))
+    return sorted(names)
+
+
+def set_reading_status(book_id: str, status: str) -> dict[str, Any] | None:
+    return update_book(book_id, reading_status=status)
+
+
+def set_book_notes_and_tags(book_id: str, notes: str, tags: list[str]) -> dict[str, Any] | None:
+    cleaned_tags = sorted({item.strip() for item in tags if item.strip()})
+    return update_book(book_id, notes=notes, tags=cleaned_tags)
+
+
+def apply_bulk_update(
+    book_ids: list[str],
+    *,
+    favorite: bool | None = None,
+    collection: str | None = None,
+    reading_status: str | None = None,
+) -> int:
+    updated_count = 0
+    metadata = _load_metadata()
+    target_ids = set(book_ids)
+    for idx, book in enumerate(metadata):
+        if book.get("id") not in target_ids:
+            continue
+        merged = dict(book)
+        if favorite is not None:
+            merged["favorite"] = favorite
+        if collection:
+            merged["collections"] = sorted({*merged.get("collections", []), collection})
+        if reading_status:
+            merged["reading_status"] = reading_status
+        merged["updated_at"] = _now_iso()
+        metadata[idx] = _normalise_book(merged)
+        updated_count += 1
+    if updated_count:
+        _save_metadata(metadata)
+    return updated_count
+
+
+def delete_books(book_ids: list[str]) -> int:
+    removed = 0
+    for book_id in book_ids:
+        if remove_from_library(book_id):
+            removed += 1
+    return removed
 
 
 def remove_from_library(book_id: str) -> bool:
@@ -284,3 +351,51 @@ def record_download_history(
     history.insert(0, entry)
     _write_json(HISTORY_FILE, history[:500])
     return entry
+
+
+def get_transfer_history(limit: int | None = None) -> list[dict[str, Any]]:
+    data = _read_json(TRANSFER_HISTORY_FILE, [])
+    if not isinstance(data, list):
+        return []
+    data = [item for item in data if isinstance(item, dict)]
+    data.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    if limit is not None:
+        return data[:limit]
+    return data
+
+
+def record_transfer_history(
+    *,
+    title: str,
+    device_name: str,
+    status: str,
+    message: str = "",
+) -> dict[str, Any]:
+    history = get_transfer_history()
+    entry = {
+        "id": str(uuid.uuid4())[:8],
+        "timestamp": _now_iso(),
+        "title": title,
+        "device_name": device_name,
+        "status": status,
+        "message": message,
+    }
+    history.insert(0, entry)
+    _write_json(TRANSFER_HISTORY_FILE, history[:500])
+    return entry
+
+
+def get_recommendations(limit: int = 6) -> list[dict[str, Any]]:
+    books = _load_metadata()
+    if len(books) < 2:
+        return []
+    ranked: list[tuple[int, dict[str, Any]]] = []
+    for book in books:
+        score = 0
+        score += 3 if book.get("favorite") else 0
+        score += 2 if book.get("reading_status") == "Reading" else 0
+        score += min(len(book.get("subjects", [])), 3)
+        score += min(len(book.get("tags", [])), 2)
+        ranked.append((score, book))
+    ranked.sort(key=lambda item: (item[0], item[1].get("downloaded_at", "")), reverse=True)
+    return [book for _, book in ranked[:limit]]

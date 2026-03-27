@@ -1,3 +1,70 @@
 2026-03-27 21:23:53,092 | INFO | MainThread | Logging initialized
 2026-03-27 21:24:04,800 | INFO | MainThread | Logging initialized
 2026-03-27 21:24:04,800 | INFO | MainThread | verification-log-entry
+2026-03-27 21:57:09,370 | INFO | MainThread | Logging initialized
+2026-03-27 21:57:54,255 | INFO | autobook-worker | Running search for query='george orwell'
+2026-03-27 21:58:09,544 | ERROR | ThreadPoolExecutor-0_3 | External source search failed for query='george orwell'
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 903, in _error_catcher
+    yield
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1028, in _raw_read
+    data = self._fp_read(amt, read1=read1) if not fp_closed else b""
+           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1011, in _fp_read
+    return self._fp.read(amt) if amt is not None else self._fp.read()
+           ~~~~~~~~~~~~~^^^^^
+  File "/Users/nihosh/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/http/client.py", line 484, in read
+    s = self.fp.read(amt)
+  File "/Users/nihosh/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/socket.py", line 725, in readinto
+    return self._sock.recv_into(b)
+           ~~~~~~~~~~~~~~~~~~~~^^^
+  File "/Users/nihosh/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/ssl.py", line 1304, in recv_into
+    return self.read(nbytes, buffer)
+           ~~~~~~~~~^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/ssl.py", line 1138, in read
+    return self._sslobj.read(len, buffer)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+TimeoutError: The read operation timed out
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/models.py", line 820, in generate
+    yield from self.raw.stream(chunk_size, decode_content=True)
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1257, in stream
+    data = self.read(amt=amt, decode_content=decode_content)
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1112, in read
+    data = self._raw_read(amt)
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 1027, in _raw_read
+    with self._error_catcher():
+         ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/nihosh/.local/share/uv/python/cpython-3.14.3-macos-aarch64-none/lib/python3.14/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/urllib3/response.py", line 908, in _error_catcher
+    raise ReadTimeoutError(self._pool, None, "Read timed out.") from e  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.ReadTimeoutError: HTTPSConnectionPool(host='libgen.vg', port=443): Read timed out.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/search.py", line 392, in _search_external
+    resp = _get_session().get(
+        f"{mirror}/index.php", params=params, timeout=TIMEOUT,
+    )
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/sessions.py", line 602, in get
+    return self.request("GET", url, **kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/sessions.py", line 746, in send
+    r.content
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/models.py", line 902, in content
+    self._content = b"".join(self.iter_content(CONTENT_CHUNK_SIZE)) or b""
+                    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/models.py", line 826, in generate
+    raise ConnectionError(e)
+requests.exceptions.ConnectionError: HTTPSConnectionPool(host='libgen.vg', port=443): Read timed out.
+2026-03-27 22:04:58,096 | INFO | MainThread | Logging initialized
+2026-03-27 22:05:32,773 | INFO | MainThread | Logging initialized

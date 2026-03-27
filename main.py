@@ -20,17 +20,26 @@ from app.devices import copy_to_device, detect_devices
 from app.library import (
     LIBRARY_DIR,
     add_to_library,
+    apply_bulk_update,
+    delete_books,
     get_all_books,
     get_book,
     get_book_path,
     get_download_history,
+    get_recommendations,
     get_settings,
+    get_transfer_history,
     list_collections,
+    list_tags,
     record_download_history,
+    record_transfer_history,
     remove_from_library,
     search_books_in_library,
     set_book_collections,
+    set_book_notes_and_tags,
+    set_reading_status,
     toggle_favorite,
+    update_book,
     update_settings,
 )
 from app.logging_utils import LOG_FILE, log_exception, log_info, setup_logging
@@ -92,6 +101,9 @@ def _rating_stars(rating: float) -> str:
 class ScrollableFrame(tk.Frame):
     """Text-based scrollable container with native trackpad scrolling."""
 
+    _active_instance: "ScrollableFrame | None" = None
+    _bindings_installed = False
+
     def __init__(self, master, fg_color=_APP_BG, **kwargs):
         super().__init__(master, bg=fg_color, **kwargs)
         self._text = tk.Text(
@@ -111,6 +123,13 @@ class ScrollableFrame(tk.Frame):
         self._text.window_create("1.0", window=self.inner, stretch=True)
         self._text.configure(state="disabled")
         self._text.bind("<Configure>", self._on_resize)
+        self.bind("<Enter>", self._activate_scroll)
+        self._text.bind("<Enter>", self._activate_scroll)
+        self.inner.bind("<Enter>", self._activate_scroll)
+        self.bind("<Leave>", self._deactivate_scroll)
+        self._text.bind("<Leave>", self._deactivate_scroll)
+        self.inner.bind("<Leave>", self._deactivate_scroll)
+        self._install_global_bindings()
 
     def winfo_children(self):
         return self.inner.winfo_children()
@@ -119,6 +138,64 @@ class ScrollableFrame(tk.Frame):
         width = self._text.winfo_width() - 6
         if width > 10:
             self.inner.configure(width=width)
+
+    @classmethod
+    def _install_global_bindings(cls) -> None:
+        if cls._bindings_installed:
+            return
+        root = tk._get_default_root()
+        if root is None:
+            return
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>", "<Shift-MouseWheel>"):
+            root.bind_all(sequence, cls._dispatch_scroll, add="+")
+        cls._bindings_installed = True
+
+    def _activate_scroll(self, _event=None) -> None:
+        ScrollableFrame._active_instance = self
+
+    def _deactivate_scroll(self, event=None) -> None:
+        if event is None:
+            return
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        if widget is None or not self._owns_widget(widget):
+            if ScrollableFrame._active_instance is self:
+                ScrollableFrame._active_instance = None
+
+    def _owns_widget(self, widget: tk.Misc | None) -> bool:
+        current = widget
+        while current is not None:
+            if current in {self, self._text, self.inner}:
+                return True
+            current = current.master
+        return False
+
+    @classmethod
+    def _dispatch_scroll(cls, event) -> str | None:
+        instance = cls._active_instance
+        if instance is None or not instance.winfo_exists():
+            return None
+        if not instance._owns_widget(event.widget):
+            return None
+        return instance._on_mousewheel(event)
+
+    def _on_mousewheel(self, event) -> str:
+        try:
+            if getattr(event, "num", None) == 4:
+                delta = -1
+            elif getattr(event, "num", None) == 5:
+                delta = 1
+            else:
+                raw_delta = int(getattr(event, "delta", 0))
+                if raw_delta == 0:
+                    return "break"
+                if platform.system() == "Darwin":
+                    delta = -1 if raw_delta > 0 else 1
+                else:
+                    delta = -max(1, min(8, abs(raw_delta) // 120 or 1)) if raw_delta > 0 else max(1, min(8, abs(raw_delta) // 120 or 1))
+            self._text.yview_scroll(delta, "units")
+        except Exception:
+            log_exception("Trackpad scroll dispatch failed")
+        return "break"
 
 
 class AutoBookApp(ctk.CTk):
@@ -136,6 +213,7 @@ class AutoBookApp(ctk.CTk):
         self.inline_status: ctk.CTkLabel | None = None
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
         self.current_search_results: list[BookResult] = []
+        self.selected_book_ids: set[str] = set()
         self._build_shell()
         self._show_search()
 
@@ -342,7 +420,8 @@ class AutoBookApp(ctk.CTk):
     def _library_summary_items(self, books: list[dict[str, Any]]) -> list[tuple[str, str]]:
         formats = {book.get("format", "").upper() for book in books if book.get("format")}
         favorites = sum(1 for book in books if book.get("favorite"))
-        return [("Titles", str(len(books))), ("Formats", str(len(formats))), ("Favorites", str(favorites))]
+        reading = sum(1 for book in books if book.get("reading_status") == "Reading")
+        return [("Titles", str(len(books))), ("Formats", str(len(formats))), ("Favorites", str(favorites)), ("Reading", str(reading))]
 
     def _history_summary_items(self, history: list[dict[str, Any]]) -> list[tuple[str, str]]:
         success = sum(1 for item in history if item.get("status") == "success")
@@ -727,6 +806,8 @@ class AutoBookApp(ctk.CTk):
     def _show_library(self) -> None:
         self._set_active_nav("library")
         self._clear_content()
+        self._refresh_settings_cache()
+        self.selected_book_ids = set()
         books = get_all_books()
         self._create_header("Library", "Search, filter and manage downloaded titles with favorites and collections.", "Refresh", self._show_library)
         self._summary_row(self._library_summary_items(books))
@@ -739,6 +820,9 @@ class AutoBookApp(ctk.CTk):
         self.library_format_var = tk.StringVar(value="All Formats")
         self.library_source_var = tk.StringVar(value="All Sources")
         self.library_favorites_var = tk.BooleanVar(value=False)
+        self.library_status_var = tk.StringVar(value="All Statuses")
+        self.library_view_var = tk.StringVar(value=self.settings.get("library_view", "List"))
+        self.library_bulk_mode_var = tk.BooleanVar(value=False)
 
         search_entry = ctk.CTkEntry(
             row,
@@ -759,6 +843,8 @@ class AutoBookApp(ctk.CTk):
         self._make_library_filter(filter_frame, "Format", self.library_format_var, ["All Formats", "EPUB", "PDF"])
         sources = sorted({book.get("source", "") for book in books if book.get("source")})
         self._make_library_filter(filter_frame, "Source", self.library_source_var, ["All Sources", *sources])
+        self._make_library_filter(filter_frame, "Status", self.library_status_var, ["All Statuses", "Unread", "Reading", "Completed"])
+        self._make_library_filter(filter_frame, "View", self.library_view_var, ["List", "Grid"])
         ctk.CTkCheckBox(
             filter_frame,
             text="Favorites only",
@@ -769,6 +855,35 @@ class AutoBookApp(ctk.CTk):
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
         ).pack(side="left", padx=(8, 0), pady=(20, 0))
+        ctk.CTkCheckBox(
+            filter_frame,
+            text="Bulk mode",
+            variable=self.library_bulk_mode_var,
+            command=self._refresh_library_results,
+            text_color=_TEXT,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            border_color=_CARD_BORDER,
+        ).pack(side="left", padx=(8, 0), pady=(20, 0))
+
+        bulk_row = ctk.CTkFrame(controls, fg_color="transparent")
+        bulk_row.pack(fill="x", padx=22, pady=(0, 18))
+        self.bulk_status_label = ctk.CTkLabel(bulk_row, text="0 selected", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT)
+        self.bulk_status_label.pack(side="left", padx=(0, 14))
+        ctk.CTkButton(bulk_row, text="Favorite Selected", width=138, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_mark_favorite).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text="Set Reading", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_set_reading).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text="Add Collection", width=122, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_add_collection).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text="Remove Selected", width=132, height=34, fg_color=_DANGER, hover_color=_DANGER_HOVER, text_color=_TEXT, command=self._bulk_remove_books).pack(side="left")
+
+        recommendations = get_recommendations(limit=4)
+        if recommendations:
+            rec_panel = ctk.CTkFrame(controls, fg_color=_CARD_BG, corner_radius=16, border_width=1, border_color=_CARD_BORDER)
+            rec_panel.pack(fill="x", padx=22, pady=(0, 18))
+            ctk.CTkLabel(rec_panel, text="Recommended from your library", font=ctk.CTkFont(size=14, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=16, pady=(14, 4))
+            rec_row = ctk.CTkFrame(rec_panel, fg_color="transparent")
+            rec_row.pack(fill="x", padx=16, pady=(0, 14))
+            for book in recommendations:
+                self._make_badge(rec_row, book.get("title", "Unknown")[:24], _SURFACE_ALT)
 
         self.inline_status = ctk.CTkLabel(self.content, text="", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
@@ -811,13 +926,23 @@ class AutoBookApp(ctk.CTk):
             fmt="" if fmt == "All Formats" else fmt,
             source="" if source == "All Sources" else source,
         )
+        status = self.library_status_var.get()
+        if status != "All Statuses":
+            books = [book for book in books if book.get("reading_status") == status]
+        view = self.library_view_var.get()
+        update_settings(library_view=view)
+        self._refresh_settings_cache()
+        self._update_bulk_status()
         self._set_status(f"{len(books)} library item(s).")
 
         if not books:
             self._render_library_empty()
             return
-        for book in books:
-            self._make_library_card(book)
+        if view == "Grid":
+            self._render_library_grid(books)
+        else:
+            for book in books:
+                self._make_library_card(book)
 
     def _render_library_empty(self) -> None:
         card = ctk.CTkFrame(self.library_results.inner, fg_color=_SURFACE, corner_radius=22, border_width=1, border_color=_CARD_BORDER)
@@ -827,11 +952,55 @@ class AutoBookApp(ctk.CTk):
             anchor="w", padx=24, pady=(0, 22)
         )
 
+    def _render_library_grid(self, books: list[dict[str, Any]]) -> None:
+        for idx, book in enumerate(books):
+            row_idx = idx // 2
+            col_idx = idx % 2
+            card = ctk.CTkFrame(self.library_results.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            card.grid(row=row_idx, column=col_idx, padx=8, pady=8, sticky="nsew")
+            self.library_results.inner.grid_columnconfigure(col_idx, weight=1)
+            if self.library_bulk_mode_var.get():
+                selected = tk.BooleanVar(value=book["id"] in self.selected_book_ids)
+                ctk.CTkCheckBox(
+                    card,
+                    text="",
+                    variable=selected,
+                    command=lambda book_id=book["id"], var=selected: self._toggle_book_selection(book_id, var.get()),
+                    fg_color=_ACCENT,
+                    hover_color=_ACCENT_HOVER,
+                    border_color=_CARD_BORDER,
+                    width=20,
+                ).pack(anchor="ne", padx=10, pady=(10, 0))
+            ctk.CTkLabel(card, text=book.get("title", "Unknown"), font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT, wraplength=260, justify="left").pack(anchor="w", padx=16, pady=(8, 4))
+            ctk.CTkLabel(card, text=book.get("author", ""), font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", padx=16)
+            ctk.CTkLabel(card, text=book.get("description", "")[:120], font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT, wraplength=260, justify="left").pack(anchor="w", padx=16, pady=(8, 10))
+            badges = ctk.CTkFrame(card, fg_color="transparent")
+            badges.pack(anchor="w", padx=16, pady=(0, 10))
+            for text, color in [
+                (book.get("format", "").upper(), _ACCENT_SOFT),
+                (book.get("reading_status", ""), _SURFACE_ALT),
+            ]:
+                if text:
+                    self._make_badge(badges, text, color)
+            ctk.CTkButton(card, text="Edit", width=90, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=lambda b=book: self._edit_book_details(b["id"])).pack(anchor="w", padx=16, pady=(0, 16))
+
     def _make_library_card(self, book: dict[str, Any]) -> None:
         card = ctk.CTkFrame(self.library_results.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
         card.pack(fill="x", pady=6, padx=2)
+        if self.library_bulk_mode_var.get():
+            selected = tk.BooleanVar(value=book["id"] in self.selected_book_ids)
+            ctk.CTkCheckBox(
+                card,
+                text="",
+                variable=selected,
+                command=lambda book_id=book["id"], var=selected: self._toggle_book_selection(book_id, var.get()),
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                border_color=_CARD_BORDER,
+                width=20,
+            ).place(x=10, y=16)
         cover = ctk.CTkLabel(card, text="FILE", width=88, height=120, fg_color=_CARD_BG, corner_radius=14, text_color=_TEXT_SOFT)
-        cover.pack(side="left", padx=(16, 10), pady=16)
+        cover.pack(side="left", padx=(40 if self.library_bulk_mode_var.get() else 16, 10), pady=16)
         if book.get("cover_url"):
             self._load_cover_async(book["cover_url"], cover, (82, 118))
 
@@ -863,17 +1032,23 @@ class AutoBookApp(ctk.CTk):
             (book.get("format", "").upper(), _ACCENT_SOFT),
             (book.get("source", ""), _SURFACE_ALT),
             (book.get("language", ""), _CARD_BG),
+            (book.get("reading_status", ""), _SUCCESS if book.get("reading_status") == "Completed" else _SURFACE_ALT),
         ]:
             if text:
                 self._make_badge(badges, text, color)
         for collection in book.get("collections", [])[:3]:
             self._make_badge(badges, collection, _SUCCESS)
+        for tag in book.get("tags", [])[:2]:
+            self._make_badge(badges, f"#{tag}", _CARD_BG)
 
-        ctk.CTkLabel(info, text=book.get("filename", ""), font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w").pack(anchor="w", pady=(10, 0))
+        if book.get("notes"):
+            ctk.CTkLabel(info, text=f'Notes: {book.get("notes", "")[:90]}', font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT, wraplength=520, justify="left").pack(anchor="w", pady=(10, 0))
+        ctk.CTkLabel(info, text=book.get("filename", ""), font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w").pack(anchor="w", pady=(6, 0))
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(side="right", padx=16, pady=16)
         for text, cmd, fg, hover in [
+            ("Edit", lambda b=book: self._edit_book_details(b["id"]), _SURFACE_ALT, _CARD_BG),
             ("Open File", lambda b=book: self._open_book_file(b), _ACCENT, _ACCENT_HOVER),
             ("Collections", lambda b=book: self._edit_collections(b["id"]), _SURFACE_ALT, _CARD_BG),
             ("Send to Device", lambda b=book: self._send_to_device(b), _SURFACE_ALT, _CARD_BG),
@@ -892,6 +1067,158 @@ class AutoBookApp(ctk.CTk):
                 text_color=_TEXT,
                 command=cmd,
             ).pack(pady=4)
+
+    def _toggle_book_selection(self, book_id: str, selected: bool) -> None:
+        if selected:
+            self.selected_book_ids.add(book_id)
+        else:
+            self.selected_book_ids.discard(book_id)
+        self._update_bulk_status()
+
+    def _update_bulk_status(self) -> None:
+        if hasattr(self, "bulk_status_label"):
+            self.bulk_status_label.configure(text=f"{len(self.selected_book_ids)} selected")
+
+    def _edit_book_details(self, book_id: str) -> None:
+        book = get_book(book_id)
+        if not book:
+            self._set_status("Book not found.")
+            return
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Edit Book Details")
+        dialog.geometry("640x620")
+        dialog.configure(fg_color=_SURFACE)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text="Edit metadata", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=22, pady=(20, 10))
+        body = ctk.CTkFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=22, pady=(0, 18))
+
+        title_var = tk.StringVar(value=book.get("title", ""))
+        author_var = tk.StringVar(value=book.get("author", ""))
+        status_var = tk.StringVar(value=book.get("reading_status", "Unread"))
+        tags_var = tk.StringVar(value=", ".join(book.get("tags", [])))
+
+        self._make_settings_field(body, "Title", ctk.CTkEntry(body, textvariable=title_var, fg_color=_CARD_BG, border_color=_CARD_BORDER, text_color=_TEXT))
+        self._make_settings_field(body, "Author", ctk.CTkEntry(body, textvariable=author_var, fg_color=_CARD_BG, border_color=_CARD_BORDER, text_color=_TEXT))
+        self._make_settings_field(body, "Reading status", ctk.CTkOptionMenu(
+            body,
+            values=["Unread", "Reading", "Completed"],
+            variable=status_var,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ))
+        self._make_settings_field(body, "Tags", ctk.CTkEntry(body, textvariable=tags_var, fg_color=_CARD_BG, border_color=_CARD_BORDER, text_color=_TEXT))
+        ctk.CTkLabel(body, text="Description", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", pady=(8, 4))
+        description_box = ctk.CTkTextbox(body, height=120, fg_color=_CARD_BG, text_color=_TEXT, border_width=1, border_color=_CARD_BORDER)
+        description_box.pack(fill="x")
+        description_box.insert("1.0", book.get("description", ""))
+        ctk.CTkLabel(body, text="Notes", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", pady=(12, 4))
+        notes_box = ctk.CTkTextbox(body, height=120, fg_color=_CARD_BG, text_color=_TEXT, border_width=1, border_color=_CARD_BORDER)
+        notes_box.pack(fill="x")
+        notes_box.insert("1.0", book.get("notes", ""))
+        tag_hint = ", ".join(list_tags()[:8])
+        if tag_hint:
+            ctk.CTkLabel(body, text=f"Existing tags: {tag_hint}", font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT).pack(anchor="w", pady=(6, 0))
+
+        actions = ctk.CTkFrame(dialog, fg_color="transparent")
+        actions.pack(fill="x", padx=22, pady=(0, 20))
+
+        def _save() -> None:
+            try:
+                update_book(
+                    book_id,
+                    title=title_var.get().strip() or book.get("title", ""),
+                    author=author_var.get().strip(),
+                    description=description_box.get("1.0", "end").strip(),
+                )
+                set_reading_status(book_id, status_var.get())
+                set_book_notes_and_tags(
+                    book_id,
+                    notes_box.get("1.0", "end").strip(),
+                    [item.strip() for item in tags_var.get().split(",") if item.strip()],
+                )
+                log_info(f"Metadata updated for book_id={book_id}")
+                dialog.destroy()
+                self._refresh_library_results()
+                self._set_status("Book metadata updated.")
+            except Exception:
+                log_exception("Book metadata update failed")
+                self._set_status("Book metadata update failed. Check the log for details.")
+
+        ctk.CTkButton(actions, text="Cancel", width=100, height=36, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=dialog.destroy).pack(side="right")
+        ctk.CTkButton(actions, text="Save", width=100, height=36, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, text_color=_TEXT, command=_save).pack(side="right", padx=(0, 10))
+
+    def _bulk_mark_favorite(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        try:
+            count = apply_bulk_update(list(self.selected_book_ids), favorite=True)
+            log_info(f"Bulk favorite applied count={count}")
+            self._set_status(f"{count} book(s) marked as favorite.")
+            self._refresh_library_results()
+        except Exception:
+            log_exception("Bulk favorite failed")
+            self._set_status("Bulk favorite failed. Check the log for details.")
+
+    def _bulk_set_reading(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        dialog = ctk.CTkInputDialog(text="Enter reading status: Unread, Reading, or Completed", title="Bulk Reading Status")
+        value = dialog.get_input()
+        if value is None:
+            return
+        status = value.strip().title()
+        if status not in {"Unread", "Reading", "Completed"}:
+            self._set_status("Invalid status. Use Unread, Reading, or Completed.")
+            return
+        try:
+            count = apply_bulk_update(list(self.selected_book_ids), reading_status=status)
+            log_info(f"Bulk reading status update count={count} status={status}")
+            self._set_status(f"{count} book(s) updated to {status}.")
+            self._refresh_library_results()
+        except Exception:
+            log_exception("Bulk reading status failed")
+            self._set_status("Bulk reading status failed. Check the log for details.")
+
+    def _bulk_add_collection(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        dialog = ctk.CTkInputDialog(text="Collection name to add to selected books", title="Bulk Collection")
+        value = dialog.get_input()
+        if value is None or not value.strip():
+            return
+        try:
+            count = apply_bulk_update(list(self.selected_book_ids), collection=value.strip())
+            log_info(f"Bulk collection update count={count} collection={value.strip()!r}")
+            self._set_status(f'Collection "{value.strip()}" added to {count} book(s).')
+            self._refresh_library_results()
+        except Exception:
+            log_exception("Bulk collection update failed")
+            self._set_status("Bulk collection update failed. Check the log for details.")
+
+    def _bulk_remove_books(self) -> None:
+        if not self.selected_book_ids:
+            self._set_status("Select at least one book in bulk mode.")
+            return
+        try:
+            count = delete_books(list(self.selected_book_ids))
+            log_info(f"Bulk delete count={count}")
+            self.selected_book_ids.clear()
+            self._set_status(f"{count} book(s) removed.")
+            self._refresh_library_results()
+        except Exception:
+            log_exception("Bulk delete failed")
+            self._set_status("Bulk delete failed. Check the log for details.")
 
     def _toggle_favorite_and_refresh(self, book_id: str) -> None:
         try:
@@ -997,6 +1324,7 @@ class AutoBookApp(ctk.CTk):
         self._set_active_nav("devices")
         self._clear_content()
         devices = detect_devices()
+        transfers = get_transfer_history(limit=6)
         self._create_header("Devices", "Review connected reading devices, install MTP support and run connection diagnostics.", "Scan", self._show_devices)
         self._summary_row(self._device_summary_items(devices))
         self.inline_status = ctk.CTkLabel(self.content, text="Connection scan complete.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
@@ -1032,6 +1360,16 @@ class AutoBookApp(ctk.CTk):
             ctk.CTkLabel(left, text=device.mount_point or "No direct mount point available", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, wraplength=720, justify="left").pack(anchor="w")
             if device.status:
                 ctk.CTkLabel(left, text=device.status, font=ctk.CTkFont(size=12), text_color=_WARNING, wraplength=720, justify="left").pack(anchor="w", pady=(8, 0))
+
+        if transfers:
+            section = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            section.pack(fill="x", padx=2, pady=(18, 6))
+            ctk.CTkLabel(section, text="Recent transfer history", font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(16, 10))
+            for entry in transfers:
+                row = ctk.CTkFrame(section, fg_color="transparent")
+                row.pack(fill="x", padx=18, pady=4)
+                ctk.CTkLabel(row, text=f'{entry.get("timestamp", "")}  |  {entry.get("title", "")}', font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(side="left")
+                self._make_badge(row, entry.get("status", "unknown").upper(), _SUCCESS if entry.get("status") == "success" else _DANGER)
 
     def _install_mtp(self) -> None:
         import shutil as _shutil
@@ -1134,8 +1472,11 @@ class AutoBookApp(ctk.CTk):
         subdir = self.settings.get("device_subdir", "").strip()
         try:
             result = copy_to_device(str(path), device, subdir=subdir)
+            record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="success", message=result)
+            log_info(f'Transfer completed book={book.get("title", "")!r} device={device.name!r}')
             self._set_status(f'Transfer completed to {device.name}. {result}')
         except Exception as exc:
+            record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="failed", message=str(exc))
             log_exception("Device transfer failed")
             self._set_status(f"Transfer failed: {exc}")
 
