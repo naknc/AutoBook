@@ -1,6 +1,6 @@
-# 🌸 AutoBook
+# AutoBook
 
-A desktop e-book downloader and library manager with a girly dark-mode UI, built with Python and customtkinter.
+A desktop e-book discovery, download, and device-transfer workspace built with Python and customtkinter.
 
 ## Features
 
@@ -12,7 +12,7 @@ A desktop e-book downloader and library manager with a girly dark-mode UI, built
 - **Device transfer** — Detects connected USB e-readers (Kobo, etc.), MTP devices, and iPads; send books directly to a device
 - **USB troubleshooter** — Built-in diagnostic dialog for macOS USB/MTP connection issues
 - **Trackpad-friendly scrolling** — Custom Text-widget-based scrollable frame for smooth trackpad scrolling on macOS (Tk 9.x)
-- **Girly dark theme** — Pink, rose, lavender, and mauve palette throughout
+- **Professional workspace UI** — A cleaner dark enterprise-style layout with dashboard summaries and structured content cards
 
 ## Requirements
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AutoBook – Desktop e-book downloader.  Run with: uv run main.py"""
+"""AutoBook desktop workspace. Run with: uv run main.py"""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ import io
 import platform
 import subprocess
 import threading
-from pathlib import Path
-from typing import Any
+import tkinter as tk
+from collections import Counter
+from typing import Any, Callable
 
 import customtkinter as ctk
 import requests
@@ -16,28 +17,39 @@ from PIL import Image
 
 from app.devices import copy_to_device, detect_devices
 from app.library import (
-    LIBRARY_DIR, add_to_library, get_all_books, get_book_path, remove_from_library,
+    LIBRARY_DIR,
+    add_to_library,
+    get_all_books,
+    get_book_path,
+    remove_from_library,
 )
 from app.search import BookResult, resolve_external_download, search_books
 
 ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+ctk.set_default_color_theme("dark-blue")
 
-# ── Girly palette ───────────────────────────────────────────
-_PINK       = "#e75480"       # primary accent
-_PINK_HOVER = "#d63e6c"       # button hover
-_ROSE       = "#b34d6d"       # sidebar bg
-_ROSE_DARK  = "#8c3a55"       # sidebar hover
-_LAVENDER   = "#c9a0dc"       # info text
-_BLUSH      = "#f5e6f0"       # light text on dark
-_MAUVE      = "#2d1f2d"       # card / frame bg
-_BG_DARK    = "#1a0f1a"       # main window bg
-_GOLD       = "#e8b4b8"       # secondary accent
-_SOFT_GRAY  = "#dda0dd"       # muted text (plum)
+_NAV_BG = "#0F172A"
+_APP_BG = "#0B1220"
+_SURFACE = "#111827"
+_SURFACE_ALT = "#1F2937"
+_CARD_BG = "#162033"
+_CARD_BORDER = "#273449"
+_TEXT = "#E5EEF9"
+_TEXT_MUTED = "#93A4BC"
+_TEXT_SOFT = "#6F839E"
+_ACCENT = "#2F6FED"
+_ACCENT_HOVER = "#275DCA"
+_ACCENT_SOFT = "#17305F"
+_SUCCESS = "#17B26A"
+_WARNING = "#F59E0B"
+_DANGER = "#D64545"
+_DANGER_HOVER = "#B83838"
 
 _UA = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                   "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+    )
 }
 
 
@@ -45,9 +57,9 @@ def _load_cover(url: str, size: tuple[int, int] = (100, 150)) -> ctk.CTkImage | 
     if not url:
         return None
     try:
-        r = requests.get(url, timeout=8, headers=_UA)
-        r.raise_for_status()
-        img = Image.open(io.BytesIO(r.content))
+        response = requests.get(url, timeout=8, headers=_UA)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content))
         return ctk.CTkImage(light_image=img, dark_image=img, size=size)
     except Exception:
         return None
@@ -59,25 +71,16 @@ def _safe_filename(title: str, fmt: str) -> str:
 
 
 def _rating_stars(rating: float) -> str:
-    """Convert a 0-5 rating to a star string like ★★★★☆."""
     full = int(rating)
     half = 1 if rating - full >= 0.3 else 0
     empty = 5 - full - half
     return "★" * full + ("½" if half else "") + "☆" * empty
 
-import tkinter as tk
-
 
 class ScrollableFrame(tk.Frame):
-    """Text-widget-based scrollable container.
+    """Text-widget-based scrollable container with native trackpad scrolling."""
 
-    Tk 9.0 on macOS does not fire <MouseWheel> events, so the Canvas-based
-    CTkScrollableFrame cannot scroll with the trackpad.  The tk.Text widget
-    *does* support native trackpad scrolling even with embedded windows,
-    so we use it as the scroll container instead.
-    """
-
-    def __init__(self, master, fg_color=_BG_DARK, **kw):
+    def __init__(self, master, fg_color=_APP_BG, **kw):
         super().__init__(master, bg=fg_color, **kw)
 
         self._text = tk.Text(
@@ -93,133 +96,369 @@ class ScrollableFrame(tk.Frame):
         )
         self._text.pack(fill="both", expand=True)
 
-        # Inner frame that callers pack widgets into
         self.inner = tk.Frame(self._text, bg=fg_color)
         self._text.configure(state="normal")
         self._text.window_create("1.0", window=self.inner, stretch=True)
         self._text.configure(state="disabled")
-
-        # Re-sync the embedded window width when the Text resizes
         self._text.bind("<Configure>", self._on_resize)
 
-    # Expose winfo_children on inner so card iteration works
     def winfo_children(self):
         return self.inner.winfo_children()
 
     def _on_resize(self, _event=None):
-        # Make the inner frame fill the text widget width
-        w = self._text.winfo_width() - 6  # small padding
-        if w > 10:
-            self.inner.configure(width=w)
+        width = self._text.winfo_width() - 6
+        if width > 10:
+            self.inner.configure(width=width)
+
 
 class AutoBookApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("✿ AutoBook ✿")
-        self.geometry("1050x700")
-        self.minsize(800, 500)
-        self.configure(fg_color=_BG_DARK)
+        self.title("AutoBook Workspace")
+        self.geometry("1240x820")
+        self.minsize(980, 640)
+        self.configure(fg_color=_APP_BG)
 
         self._image_refs: list[ctk.CTkImage] = []
-
-        # Sidebar
-        sb = ctk.CTkFrame(self, width=180, corner_radius=0, fg_color=_ROSE)
-        sb.pack(side="left", fill="y")
-        sb.pack_propagate(False)
-        ctk.CTkLabel(sb, text="🌸 AutoBook",
-                     font=ctk.CTkFont(size=20, weight="bold"),
-                     text_color=_BLUSH).pack(padx=20, pady=(25, 30))
-        for txt, cmd in [("🔍  Search", self._show_search),
-                         ("💖  Library", self._show_library),
-                         ("📱  Devices", self._show_devices)]:
-            ctk.CTkButton(sb, text=txt, command=cmd, height=38,
-                          fg_color=_ROSE_DARK, hover_color=_PINK,
-                          text_color=_BLUSH, corner_radius=12,
-                          ).pack(padx=15, pady=5, fill="x")
-
-        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=_BG_DARK)
-        self.content.pack(side="right", fill="both", expand=True)
         self.inline_status: ctk.CTkLabel | None = None
+        self.nav_buttons: dict[str, ctk.CTkButton] = {}
+        self.active_section = "search"
+
+        self._build_shell()
         self._show_search()
+
+    def _build_shell(self) -> None:
+        sidebar = ctk.CTkFrame(self, width=250, corner_radius=0, fg_color=_NAV_BG)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
+
+        brand = ctk.CTkFrame(sidebar, fg_color="transparent")
+        brand.pack(fill="x", padx=22, pady=(24, 18))
+        ctk.CTkLabel(
+            brand,
+            text="AutoBook",
+            font=ctk.CTkFont(size=28, weight="bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            brand,
+            text="Digital publishing workspace",
+            font=ctk.CTkFont(size=13),
+            text_color=_TEXT_MUTED,
+        ).pack(anchor="w", pady=(4, 0))
+
+        nav = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav.pack(fill="x", padx=16, pady=(8, 0))
+        self._add_nav_button(nav, "search", "Catalog Search", self._show_search)
+        self._add_nav_button(nav, "library", "Library", self._show_library)
+        self._add_nav_button(nav, "devices", "Devices", self._show_devices)
+
+        footer = ctk.CTkFrame(sidebar, fg_color=_SURFACE, corner_radius=18)
+        footer.pack(side="bottom", fill="x", padx=16, pady=16)
+        ctk.CTkLabel(
+            footer,
+            text="Operations",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=_TEXT_MUTED,
+        ).pack(anchor="w", padx=14, pady=(12, 2))
+        ctk.CTkLabel(
+            footer,
+            text="Search, download, organize and transfer titles from one workspace.",
+            font=ctk.CTkFont(size=12),
+            text_color=_TEXT_SOFT,
+            justify="left",
+            wraplength=190,
+        ).pack(anchor="w", padx=14, pady=(0, 14))
+
+        self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=_APP_BG)
+        self.content.pack(side="right", fill="both", expand=True)
+
+    def _add_nav_button(
+        self,
+        parent: ctk.CTkFrame,
+        key: str,
+        label: str,
+        command: Callable[[], None],
+    ) -> None:
+        button = ctk.CTkButton(
+            parent,
+            text=label,
+            command=command,
+            height=46,
+            corner_radius=14,
+            anchor="w",
+            fg_color="transparent",
+            hover_color=_SURFACE_ALT,
+            text_color=_TEXT_MUTED,
+            font=ctk.CTkFont(size=14, weight="bold"),
+        )
+        button.pack(fill="x", pady=4)
+        self.nav_buttons[key] = button
+
+    def _set_active_nav(self, key: str) -> None:
+        self.active_section = key
+        for btn_key, button in self.nav_buttons.items():
+            if btn_key == key:
+                button.configure(fg_color=_ACCENT_SOFT, hover_color=_ACCENT_SOFT, text_color=_TEXT)
+            else:
+                button.configure(fg_color="transparent", hover_color=_SURFACE_ALT, text_color=_TEXT_MUTED)
 
     def _clear_content(self) -> None:
         self._image_refs.clear()
         self.inline_status = None
-        for w in self.content.winfo_children():
-            w.destroy()
+        for widget in self.content.winfo_children():
+            widget.destroy()
 
     def _set_status(self, msg: str) -> None:
         if self.inline_status:
-            try: self.inline_status.configure(text=msg)
-            except Exception: pass
+            try:
+                self.inline_status.configure(text=msg)
+            except Exception:
+                pass
 
-    def _load_cover_async(self, url: str, label: ctk.CTkLabel,
-                          size: tuple[int, int] = (100, 150)) -> None:
-        """Load a cover image in a background thread and update *label*."""
+    def _create_header(
+        self,
+        title: str,
+        subtitle: str,
+        action_text: str | None = None,
+        action_command: Callable[[], None] | None = None,
+    ) -> ctk.CTkFrame:
+        header = ctk.CTkFrame(self.content, fg_color="transparent")
+        header.pack(fill="x", padx=28, pady=(24, 12))
+
+        text_col = ctk.CTkFrame(header, fg_color="transparent")
+        text_col.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            text_col,
+            text=title,
+            font=ctk.CTkFont(size=30, weight="bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            text_col,
+            text=subtitle,
+            font=ctk.CTkFont(size=14),
+            text_color=_TEXT_MUTED,
+        ).pack(anchor="w", pady=(4, 0))
+
+        if action_text and action_command:
+            ctk.CTkButton(
+                header,
+                text=action_text,
+                command=action_command,
+                width=112,
+                height=38,
+                corner_radius=14,
+                fg_color=_SURFACE,
+                hover_color=_SURFACE_ALT,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                text_color=_TEXT,
+            ).pack(side="right")
+
+        return header
+
+    def _summary_row(self, items: list[tuple[str, str]]) -> None:
+        row = ctk.CTkFrame(self.content, fg_color="transparent")
+        row.pack(fill="x", padx=28, pady=(0, 16))
+        for label, value in items:
+            card = ctk.CTkFrame(row, fg_color=_SURFACE, corner_radius=18, border_width=1, border_color=_CARD_BORDER)
+            card.pack(side="left", fill="both", expand=True, padx=(0, 12))
+            ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color=_TEXT_SOFT).pack(
+                anchor="w", padx=16, pady=(14, 4)
+            )
+            ctk.CTkLabel(card, text=value, font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(
+                anchor="w", padx=16, pady=(0, 14)
+            )
+
+    def _make_surface(self, parent: ctk.CTkBaseClass, pady: tuple[int, int] = (0, 0)) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(parent, fg_color=_SURFACE, corner_radius=20, border_width=1, border_color=_CARD_BORDER)
+        frame.pack(fill="x", padx=28, pady=pady)
+        return frame
+
+    def _make_badge(self, parent: ctk.CTkBaseClass, text: str, fg_color: str = _ACCENT_SOFT) -> None:
+        ctk.CTkLabel(
+            parent,
+            text=text,
+            fg_color=fg_color,
+            corner_radius=10,
+            text_color=_TEXT,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            padx=10,
+            pady=4,
+        ).pack(side="left", padx=(0, 8))
+
+    def _show_empty_state(self, title: str, body: str, action_text: str | None = None, action_cmd: Callable[[], None] | None = None) -> None:
+        card = ctk.CTkFrame(self.content, fg_color=_SURFACE, corner_radius=22, border_width=1, border_color=_CARD_BORDER)
+        card.pack(fill="x", padx=28, pady=(10, 20))
+        ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(
+            anchor="w", padx=24, pady=(22, 8)
+        )
+        ctk.CTkLabel(
+            card,
+            text=body,
+            font=ctk.CTkFont(size=14),
+            text_color=_TEXT_MUTED,
+            justify="left",
+            wraplength=760,
+        ).pack(anchor="w", padx=24, pady=(0, 18))
+        if action_text and action_cmd:
+            ctk.CTkButton(
+                card,
+                text=action_text,
+                command=action_cmd,
+                width=180,
+                height=38,
+                corner_radius=14,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                text_color=_TEXT,
+            ).pack(anchor="w", padx=24, pady=(0, 22))
+
+    def _load_cover_async(
+        self,
+        url: str,
+        label: ctk.CTkLabel,
+        size: tuple[int, int] = (100, 150),
+    ) -> None:
         def _work(u: str = url, lbl: ctk.CTkLabel = label) -> None:
             img = _load_cover(u, size)
             if img:
                 self._image_refs.append(img)
                 self.after(0, lambda: _apply(img, lbl))
-        def _apply(i: ctk.CTkImage, l: ctk.CTkLabel) -> None:
-            try: l.configure(image=i, text="")
-            except Exception: pass
+
+        def _apply(img: ctk.CTkImage, lbl: ctk.CTkLabel) -> None:
+            try:
+                lbl.configure(image=img, text="")
+            except Exception:
+                pass
+
         threading.Thread(target=_work, daemon=True).start()
 
-    # ── Search page ─────────────────────────────────────────────────
+    def _search_summary_items(self) -> list[tuple[str, str]]:
+        books = get_all_books()
+        return [
+            ("Indexed Sources", "4"),
+            ("Local Titles", str(len(books))),
+            ("Formats Ready", "EPUB / PDF"),
+        ]
+
+    def _library_summary_items(self, books: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        formats = {b.get("format", "").upper() for b in books if b.get("format")}
+        sources = {b.get("source", "") for b in books if b.get("source")}
+        return [
+            ("Titles", str(len(books))),
+            ("Formats", str(len(formats) or 0)),
+            ("Sources", str(len(sources) or 0)),
+        ]
+
+    def _device_summary_items(self, devices: list[Any]) -> list[tuple[str, str]]:
+        counts = Counter(dev.kind for dev in devices)
+        return [
+            ("Detected Devices", str(len(devices))),
+            ("E-Readers", str(counts.get("ereader", 0) + counts.get("mtp", 0))),
+            ("Tablets / Phones", str(counts.get("ipad", 0))),
+        ]
+
+    # Search page
 
     def _show_search(self) -> None:
+        self._set_active_nav("search")
         self._clear_content()
 
-        top = ctk.CTkFrame(self.content, fg_color="transparent")
-        top.pack(fill="x", padx=20, pady=(15, 5))
+        self._create_header(
+            "Catalog Search",
+            "Search public-domain and external sources, then download directly into your managed library.",
+        )
+        self._summary_row(self._search_summary_items())
 
-        ctk.CTkLabel(top, text="✨ Search for e-books",
-                     font=ctk.CTkFont(size=22, weight="bold"),
-                     text_color=_BLUSH).pack(side="left")
+        panel = self._make_surface(self.content, (0, 16))
+        ctk.CTkLabel(
+            panel,
+            text="Find a title, author or keyword",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", padx=22, pady=(18, 4))
+        ctk.CTkLabel(
+            panel,
+            text="Results are ranked across Gutenberg, Open Library, Internet Archive and your configured external source.",
+            font=ctk.CTkFont(size=13),
+            text_color=_TEXT_MUTED,
+        ).pack(anchor="w", padx=22, pady=(0, 14))
 
-        search_row = ctk.CTkFrame(self.content, fg_color="transparent")
-        search_row.pack(fill="x", padx=20, pady=10)
+        search_row = ctk.CTkFrame(panel, fg_color="transparent")
+        search_row.pack(fill="x", padx=22, pady=(0, 18))
 
-        self.search_entry = ctk.CTkEntry(search_row,
-                                         placeholder_text="Book title, author name, or keyword…",
-                                         height=38, corner_radius=16,
-                                         border_color=_PINK,
-                                         fg_color=_MAUVE,
-                                         text_color=_BLUSH)
-        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.search_entry.bind("<Return>", lambda e: self._do_search())
+        self.search_entry = ctk.CTkEntry(
+            search_row,
+            placeholder_text="Examples: Crime and Punishment, Stefan Zweig, science fiction",
+            height=46,
+            corner_radius=14,
+            border_color=_CARD_BORDER,
+            fg_color=_CARD_BG,
+            text_color=_TEXT,
+            placeholder_text_color=_TEXT_SOFT,
+        )
+        self.search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.search_entry.bind("<Return>", lambda _e: self._do_search())
 
-        ctk.CTkButton(search_row, text="🔍 Search", width=100, height=38,
-                      fg_color=_PINK, hover_color=_PINK_HOVER,
-                      corner_radius=16,
-                      command=self._do_search).pack(side="right")
+        ctk.CTkButton(
+            search_row,
+            text="Search",
+            width=128,
+            height=46,
+            corner_radius=14,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            text_color=_TEXT,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            command=self._do_search,
+        ).pack(side="right")
 
-        # Inline status line
-        self.inline_status = ctk.CTkLabel(self.content, text="",
-                                          font=ctk.CTkFont(size=12),
-                                          text_color=_SOFT_GRAY, anchor="w")
-        self.inline_status.pack(fill="x", padx=22, pady=(0, 2))
+        self.inline_status = ctk.CTkLabel(
+            self.content,
+            text="Ready for search.",
+            font=ctk.CTkFont(size=12),
+            text_color=_TEXT_SOFT,
+            anchor="w",
+        )
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
 
-        # Scrollable results area
-        self.results_frame = ScrollableFrame(self.content, fg_color=_BG_DARK)
-        self.results_frame.pack(fill="both", expand=True, padx=20, pady=(5, 15))
-
+        self.results_frame = ScrollableFrame(self.content, fg_color=_APP_BG)
+        self.results_frame.pack(fill="both", expand=True, padx=28, pady=(0, 18))
+        self._show_search_placeholder()
         self.search_entry.focus()
+
+    def _show_search_placeholder(self) -> None:
+        placeholder = ctk.CTkFrame(self.results_frame.inner, fg_color=_SURFACE, corner_radius=22, border_width=1, border_color=_CARD_BORDER)
+        placeholder.pack(fill="x", padx=2, pady=2)
+        ctk.CTkLabel(
+            placeholder,
+            text="Discovery workspace",
+            font=ctk.CTkFont(size=22, weight="bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", padx=24, pady=(22, 8))
+        ctk.CTkLabel(
+            placeholder,
+            text="Start a search to review availability, compare sources, inspect ratings and download files into the local catalog.",
+            font=ctk.CTkFont(size=14),
+            text_color=_TEXT_MUTED,
+            justify="left",
+            wraplength=820,
+        ).pack(anchor="w", padx=24, pady=(0, 20))
 
     def _do_search(self) -> None:
         query = self.search_entry.get().strip()
         if not query:
+            self._set_status("Please enter a search query.")
             return
 
-        # Clear old results
-        for w in self.results_frame.winfo_children():
-            w.destroy()
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
 
-        self._set_status(f"🌸 Searching for \"{query}\"…")
+        self._set_status(f'Searching sources for "{query}"...')
         self.update_idletasks()
 
-        # Run search in background thread
         def _worker() -> None:
             results = search_books(query)
             self.after(0, lambda: self._display_results(results, query))
@@ -227,519 +466,656 @@ class AutoBookApp(ctk.CTk):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _display_results(self, results: list[BookResult], query: str) -> None:
-        for w in self.results_frame.winfo_children():
-            w.destroy()
+        for widget in self.results_frame.winfo_children():
+            widget.destroy()
 
-        self._set_status(f"✿ Found {len(results)} results for \"{query}\"")
+        self._set_status(f'{len(results)} results found for "{query}".')
 
         if not results:
-            ctk.CTkLabel(self.results_frame.inner,
-                         text="No results found 💔\nTry a different title, author, or keyword.",
-                         font=ctk.CTkFont(size=14), text_color=_SOFT_GRAY).pack(pady=30)
+            empty = ctk.CTkFrame(self.results_frame.inner, fg_color=_SURFACE, corner_radius=22, border_width=1, border_color=_CARD_BORDER)
+            empty.pack(fill="x", padx=2, pady=2)
+            ctk.CTkLabel(empty, text="No results found", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(
+                anchor="w", padx=24, pady=(22, 8)
+            )
+            ctk.CTkLabel(
+                empty,
+                text="Try another author, a shorter title, or a broader keyword. Public-domain catalogs are often sensitive to exact phrasing.",
+                font=ctk.CTkFont(size=14),
+                text_color=_TEXT_MUTED,
+                justify="left",
+                wraplength=820,
+            ).pack(anchor="w", padx=24, pady=(0, 22))
             return
 
         for book in results:
             self._make_search_card(book)
 
     def _make_search_card(self, book: BookResult) -> None:
-        card = ctk.CTkFrame(self.results_frame.inner, corner_radius=14,
-                            fg_color=_MAUVE, border_width=1, border_color=_ROSE)
-        card.pack(fill="x", pady=4, padx=2)
+        card = ctk.CTkFrame(
+            self.results_frame.inner,
+            corner_radius=20,
+            fg_color=_SURFACE,
+            border_width=1,
+            border_color=_CARD_BORDER,
+        )
+        card.pack(fill="x", pady=6, padx=2)
 
-        cover = ctk.CTkLabel(card, text="📕", width=100, height=120,
-                             font=ctk.CTkFont(size=36))
-        cover.pack(side="left", padx=(10, 5), pady=8)
+        cover = ctk.CTkLabel(card, text="BOOK", width=104, height=148, fg_color=_CARD_BG, corner_radius=14, text_color=_TEXT_SOFT)
+        cover.pack(side="left", padx=(16, 10), pady=16)
         if book.cover_url:
             self._load_cover_async(book.cover_url, cover)
 
         info = ctk.CTkFrame(card, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        ctk.CTkLabel(info, text=book.title, font=ctk.CTkFont(size=15, weight="bold"),
-                     anchor="w", wraplength=400, text_color=_BLUSH).pack(anchor="w")
-        # Star rating
+        info.pack(side="left", fill="both", expand=True, padx=8, pady=16)
+        ctk.CTkLabel(
+            info,
+            text=book.title,
+            font=ctk.CTkFont(size=18, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=520,
+            text_color=_TEXT,
+        ).pack(anchor="w")
+
+        if book.author:
+            ctk.CTkLabel(
+                info,
+                text=book.author,
+                font=ctk.CTkFont(size=13),
+                text_color=_TEXT_MUTED,
+                anchor="w",
+            ).pack(anchor="w", pady=(4, 10))
+
+        meta = ctk.CTkFrame(info, fg_color="transparent")
+        meta.pack(anchor="w", pady=(0, 10))
+        if book.source:
+            self._make_badge(meta, book.source, _ACCENT_SOFT)
+        if book.language:
+            self._make_badge(meta, book.language, _CARD_BG)
+        if book.year:
+            self._make_badge(meta, book.year, _SURFACE_ALT)
+
         if book.rating > 0:
-            stars = _rating_stars(book.rating)
-            rating_text = f"{stars}  {book.rating:.1f}  ({book.ratings_count})"
-            ctk.CTkLabel(info, text=rating_text, font=ctk.CTkFont(size=12),
-                         text_color=_GOLD, anchor="w").pack(anchor="w", pady=(1, 0))
-        subtitle = " ♡ ".join(filter(None, [book.author, book.year]))
-        if subtitle:
-            ctk.CTkLabel(info, text=subtitle, font=ctk.CTkFont(size=12),
-                         text_color=_SOFT_GRAY, anchor="w").pack(anchor="w", pady=(2, 0))
-        src = f"{book.source}  ·  {book.language}" if book.language else book.source
-        ctk.CTkLabel(info, text=src, font=ctk.CTkFont(size=11),
-                     text_color=_LAVENDER, anchor="w").pack(anchor="w", pady=(2, 0))
+            ctk.CTkLabel(
+                info,
+                text=f"{_rating_stars(book.rating)}  {book.rating:.1f}  ({book.ratings_count} reviews)",
+                font=ctk.CTkFont(size=12),
+                text_color=_WARNING,
+                anchor="w",
+            ).pack(anchor="w")
+        else:
+            ctk.CTkLabel(
+                info,
+                text="No rating metadata available",
+                font=ctk.CTkFont(size=12),
+                text_color=_TEXT_SOFT,
+                anchor="w",
+            ).pack(anchor="w")
 
         btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        btn_frame.pack(side="right", padx=10, pady=8)
+        btn_frame.pack(side="right", padx=16, pady=16)
         for dl in book.downloads:
             ctk.CTkButton(
-                btn_frame, text=f"♡ {dl.format.upper()}  ({dl.mirror})",
-                width=200, height=30, fg_color=_PINK, hover_color=_PINK_HOVER,
+                btn_frame,
+                text=f"Download {dl.format.upper()}",
+                width=170,
+                height=36,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
                 corner_radius=12,
+                text_color=_TEXT,
                 command=lambda d=dl, b=book: self._download_book(d, b),
-            ).pack(pady=2)
+            ).pack(pady=4)
+            ctk.CTkLabel(
+                btn_frame,
+                text=dl.mirror,
+                font=ctk.CTkFont(size=11),
+                text_color=_TEXT_SOFT,
+            ).pack(pady=(0, 4))
         if not book.downloads:
-            ctk.CTkLabel(btn_frame, text="No direct download", text_color=_SOFT_GRAY).pack()
+            ctk.CTkLabel(btn_frame, text="No direct file", text_color=_TEXT_SOFT).pack()
 
     def _download_book(self, dl: Any, book: BookResult) -> None:
-        self._set_status(f"💫 Downloading {book.title} ({dl.format.upper()})…")
+        self._set_status(f'Downloading "{book.title}" as {dl.format.upper()}...')
         self.update_idletasks()
 
-        # Build ordered list: clicked link first, then same-format alternatives
-        candidates = [dl] + [
-            d for d in book.downloads
-            if d.url != dl.url and d.format == dl.format
-        ]
+        candidates = [dl] + [d for d in book.downloads if d.url != dl.url and d.format == dl.format]
 
         def _try_download(link: Any) -> requests.Response | None:
-            """Attempt a single download link; return response or None."""
             urls = [link.url]
-            # Resolve ads.php → get.php with key
             if "/ads.php?md5=" in link.url:
                 resolved = resolve_external_download(link.url)
                 if resolved:
                     urls = [resolved]
                 else:
                     return None
-            # For IA links, also try alternate mirror
             elif "archive.org" in link.url:
-                alt = link.url.replace("//dn", "//ia").replace(
-                    ".ca.archive.org", ".us.archive.org")
+                alt = link.url.replace("//dn", "//ia").replace(".ca.archive.org", ".us.archive.org")
                 if alt != link.url:
                     urls.append(alt)
+
             for url in urls:
                 try:
-                    resp = requests.get(url, stream=True, timeout=60,
-                                        headers=_UA, allow_redirects=True)
-                    if resp.status_code >= 400:
-                        resp.close()
+                    response = requests.get(
+                        url,
+                        stream=True,
+                        timeout=60,
+                        headers=_UA,
+                        allow_redirects=True,
+                    )
+                    if response.status_code >= 400:
+                        response.close()
                         continue
-                    ct = resp.headers.get("Content-Type", "")
-                    if "text/html" in ct and link.format in ("epub", "pdf"):
-                        resp.close()
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/html" in content_type and link.format in ("epub", "pdf"):
+                        response.close()
                         continue
-                    return resp
+                    return response
                 except requests.RequestException:
                     continue
             return None
 
         def _worker() -> None:
             for candidate in candidates:
-                resp = _try_download(candidate)
-                if resp is None:
+                response = _try_download(candidate)
+                if response is None:
                     continue
+                dest = None
                 try:
-                    fname = _safe_filename(book.title, candidate.format)
-                    dest = LIBRARY_DIR / fname
-                    n = 1
+                    filename = _safe_filename(book.title, candidate.format)
+                    dest = LIBRARY_DIR / filename
+                    index = 1
                     while dest.exists():
-                        fname = _safe_filename(f"{book.title}_{n}", candidate.format)
-                        dest = LIBRARY_DIR / fname
-                        n += 1
-                    with open(dest, "wb") as f:
-                        for chunk in resp.iter_content(8192):
-                            f.write(chunk)
-                    add_to_library(fname, book.title, book.author,
-                                   candidate.format, book.cover_url, book.source)
-                    self.after(0, lambda: self._set_status(
-                        f'💖 "{book.title}" downloaded!'))
+                        filename = _safe_filename(f"{book.title}_{index}", candidate.format)
+                        dest = LIBRARY_DIR / filename
+                        index += 1
+                    with open(dest, "wb") as handle:
+                        for chunk in response.iter_content(8192):
+                            handle.write(chunk)
+                    add_to_library(filename, book.title, book.author, candidate.format, book.cover_url, book.source)
+                    self.after(0, lambda: self._set_status(f'"{book.title}" added to the library.'))
                     return
-                except Exception as exc:
-                    # Write failed – clean up partial file and try next
-                    if dest.exists():
+                except Exception:
+                    if dest and dest.exists():
                         dest.unlink(missing_ok=True)
-                    continue
                 finally:
-                    resp.close()
+                    response.close()
 
-            # All candidates exhausted
-            self.after(0, lambda: self._set_status(
-                f"💔 Download failed – all sources returned errors"))
+            self.after(0, lambda: self._set_status("Download failed. All candidate sources returned errors."))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    # ── Library page ────────────────────────────────────────────────
+    # Library page
 
     def _show_library(self) -> None:
+        self._set_active_nav("library")
         self._clear_content()
 
-        top = ctk.CTkFrame(self.content, fg_color="transparent")
-        top.pack(fill="x", padx=20, pady=(15, 10))
-
-        ctk.CTkLabel(top, text="💖 My Library",
-                     font=ctk.CTkFont(size=22, weight="bold"),
-                     text_color=_BLUSH).pack(side="left")
-
-        ctk.CTkButton(top, text="⟳ Refresh", width=90, height=32,
-                      fg_color=_PINK, hover_color=_PINK_HOVER,
-                      corner_radius=12,
-                      command=self._show_library).pack(side="right")
-
-        # Inline status line
-        self.inline_status = ctk.CTkLabel(self.content, text="",
-                                          font=ctk.CTkFont(size=12),
-                                          text_color=_SOFT_GRAY, anchor="w")
-        self.inline_status.pack(fill="x", padx=22, pady=(0, 2))
-
         books = get_all_books()
+        self._create_header("Library", "Manage downloaded titles, open local files and send them to connected devices.", "Refresh", self._show_library)
+        self._summary_row(self._library_summary_items(books))
+
+        self.inline_status = ctk.CTkLabel(
+            self.content,
+            text=f"{len(books)} local title(s) available.",
+            font=ctk.CTkFont(size=12),
+            text_color=_TEXT_SOFT,
+            anchor="w",
+        )
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
 
         if not books:
-            ctk.CTkLabel(self.content,
-                         text="Your library is empty 🌸\nSearch and download some books!",
-                         font=ctk.CTkFont(size=16), text_color=_SOFT_GRAY).pack(pady=60)
+            self._show_empty_state(
+                "Your library is empty",
+                "Search for a book and download it into the managed catalog. Each file is stored locally with metadata and device-transfer support.",
+                "Go to Search",
+                self._show_search,
+            )
             return
 
-        scroll = ScrollableFrame(self.content, fg_color=_BG_DARK)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
-
+        scroll = ScrollableFrame(self.content, fg_color=_APP_BG)
+        scroll.pack(fill="both", expand=True, padx=28, pady=(0, 18))
         for book in books:
             self._make_library_card(scroll.inner, book)
 
-    def _make_library_card(self, parent: ctk.CTkFrame, book: dict[str, Any]) -> None:
-        card = ctk.CTkFrame(parent, corner_radius=14,
-                            fg_color=_MAUVE, border_width=1, border_color=_ROSE)
-        card.pack(fill="x", pady=4, padx=2)
+    def _make_library_card(self, parent: ctk.Frame, book: dict[str, Any]) -> None:
+        card = ctk.CTkFrame(parent, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+        card.pack(fill="x", pady=6, padx=2)
 
-        cover = ctk.CTkLabel(card, text="📖", width=80, height=100,
-                             font=ctk.CTkFont(size=30))
-        cover.pack(side="left", padx=(10, 5), pady=8)
+        cover = ctk.CTkLabel(card, text="FILE", width=88, height=120, fg_color=_CARD_BG, corner_radius=14, text_color=_TEXT_SOFT)
+        cover.pack(side="left", padx=(16, 10), pady=16)
         if book.get("cover_url"):
-            self._load_cover_async(book["cover_url"], cover, (80, 110))
+            self._load_cover_async(book["cover_url"], cover, (82, 118))
 
         info = ctk.CTkFrame(card, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, padx=8, pady=8)
-        ctk.CTkLabel(info, text=book.get("title", "Unknown"),
-                     font=ctk.CTkFont(size=14, weight="bold"),
-                     anchor="w", wraplength=350, text_color=_BLUSH).pack(anchor="w")
+        info.pack(side="left", fill="both", expand=True, padx=8, pady=16)
+        ctk.CTkLabel(
+            info,
+            text=book.get("title", "Unknown"),
+            font=ctk.CTkFont(size=17, weight="bold"),
+            text_color=_TEXT,
+            anchor="w",
+            wraplength=480,
+        ).pack(anchor="w")
         if book.get("author"):
-            ctk.CTkLabel(info, text=book["author"], font=ctk.CTkFont(size=12),
-                         text_color=_SOFT_GRAY, anchor="w").pack(anchor="w")
-        ctk.CTkLabel(info, text=f"Format: {book.get('format', '').upper()}",
-                     font=ctk.CTkFont(size=11), text_color=_LAVENDER,
-                     anchor="w").pack(anchor="w", pady=(2, 0))
+            ctk.CTkLabel(info, text=book["author"], font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED, anchor="w").pack(
+                anchor="w", pady=(4, 10)
+            )
 
-        bf = ctk.CTkFrame(card, fg_color="transparent")
-        bf.pack(side="right", padx=10, pady=8)
-        ctk.CTkButton(bf, text="📂 Open", width=100, height=30,
-                      fg_color=_PINK, hover_color=_PINK_HOVER, corner_radius=12,
-                      command=lambda b=book: self._open_book_file(b)).pack(pady=2)
-        ctk.CTkButton(bf, text="📱 Send", width=100, height=30,
-                      fg_color=_ROSE_DARK, hover_color=_ROSE, corner_radius=12,
-                      command=lambda b=book: self._send_to_device(b)).pack(pady=2)
-        ctk.CTkButton(bf, text="🗑 Remove", width=100, height=30,
-                      fg_color="#6b2039", hover_color="#8b2a4a", corner_radius=12,
-                      command=lambda b=book: self._delete_book(b)).pack(pady=2)
+        meta = ctk.CTkFrame(info, fg_color="transparent")
+        meta.pack(anchor="w")
+        if book.get("format"):
+            self._make_badge(meta, book["format"].upper(), _ACCENT_SOFT)
+        if book.get("source"):
+            self._make_badge(meta, book["source"], _SURFACE_ALT)
+
+        ctk.CTkLabel(
+            info,
+            text=book.get("filename", ""),
+            font=ctk.CTkFont(size=12),
+            text_color=_TEXT_SOFT,
+            anchor="w",
+        ).pack(anchor="w", pady=(12, 0))
+
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.pack(side="right", padx=16, pady=16)
+        ctk.CTkButton(
+            actions,
+            text="Open File",
+            width=132,
+            height=34,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            corner_radius=12,
+            text_color=_TEXT,
+            command=lambda b=book: self._open_book_file(b),
+        ).pack(pady=4)
+        ctk.CTkButton(
+            actions,
+            text="Send to Device",
+            width=132,
+            height=34,
+            fg_color=_SURFACE_ALT,
+            hover_color=_CARD_BG,
+            corner_radius=12,
+            border_width=1,
+            border_color=_CARD_BORDER,
+            text_color=_TEXT,
+            command=lambda b=book: self._send_to_device(b),
+        ).pack(pady=4)
+        ctk.CTkButton(
+            actions,
+            text="Remove",
+            width=132,
+            height=34,
+            fg_color=_DANGER,
+            hover_color=_DANGER_HOVER,
+            corner_radius=12,
+            text_color=_TEXT,
+            command=lambda b=book: self._delete_book(b),
+        ).pack(pady=4)
 
     def _open_book_file(self, book: dict[str, Any]) -> None:
         path = get_book_path(book["id"])
         if not path:
-            self._set_status("💔 File not found"); return
-        cmd = {"Darwin": ["open", "-R"], "Linux": ["xdg-open"]}.get(
-            platform.system(), ["explorer"])
+            self._set_status("File not found in library.")
+            return
+        cmd = {"Darwin": ["open", "-R"], "Linux": ["xdg-open"]}.get(platform.system(), ["explorer"])
         subprocess.Popen([*cmd, str(path if cmd[0] == "open" else path.parent)])
 
     def _delete_book(self, book: dict[str, Any]) -> None:
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("Confirm Delete")
-        dlg.geometry("360x150")
-        dlg.configure(fg_color=_MAUVE)
-        dlg.transient(self); dlg.grab_set()
-        ctk.CTkLabel(dlg, text=f"Remove \"{book.get('title')}\"? 🥺",
-                     font=ctk.CTkFont(size=14), wraplength=320,
-                     text_color=_BLUSH).pack(pady=(20, 10))
-        row = ctk.CTkFrame(dlg, fg_color="transparent")
-        row.pack(pady=10)
-        def _confirm():
-            remove_from_library(book["id"]); dlg.destroy()
-            self._show_library(); self._set_status(f"Removed \"{book.get('title')}\"")
-        ctk.CTkButton(row, text="Remove", fg_color="#6b2039",
-                      hover_color="#8b2a4a", corner_radius=12,
-                      command=_confirm).pack(side="left", padx=5)
-        ctk.CTkButton(row, text="Cancel", fg_color=_ROSE_DARK,
-                      hover_color=_ROSE, corner_radius=12,
-                      command=dlg.destroy).pack(side="left", padx=5)
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Remove Title")
+        dialog.geometry("420x180")
+        dialog.configure(fg_color=_SURFACE)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ctk.CTkLabel(
+            dialog,
+            text="Remove this title from the library?",
+            font=ctk.CTkFont(size=18, weight="bold"),
+            text_color=_TEXT,
+        ).pack(anchor="w", padx=22, pady=(22, 8))
+        ctk.CTkLabel(
+            dialog,
+            text=book.get("title", "Unknown"),
+            font=ctk.CTkFont(size=14),
+            text_color=_TEXT_MUTED,
+            wraplength=360,
+            justify="left",
+        ).pack(anchor="w", padx=22, pady=(0, 18))
+
+        actions = ctk.CTkFrame(dialog, fg_color="transparent")
+        actions.pack(anchor="e", padx=22, pady=(0, 18))
+
+        def _confirm() -> None:
+            remove_from_library(book["id"])
+            dialog.destroy()
+            self._show_library()
+            self._set_status(f'"{book.get("title", "Unknown")}" removed from the library.')
+
+        ctk.CTkButton(
+            actions,
+            text="Cancel",
+            fg_color=_SURFACE_ALT,
+            hover_color=_CARD_BG,
+            border_width=1,
+            border_color=_CARD_BORDER,
+            corner_radius=12,
+            width=100,
+            text_color=_TEXT,
+            command=dialog.destroy,
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            actions,
+            text="Remove",
+            fg_color=_DANGER,
+            hover_color=_DANGER_HOVER,
+            corner_radius=12,
+            width=100,
+            text_color=_TEXT,
+            command=_confirm,
+        ).pack(side="left")
 
     def _send_to_device(self, book: dict[str, Any]) -> None:
         devices = detect_devices()
         if not devices:
-            self._set_status("💔 No devices connected – go to Devices tab")
+            self._set_status("No device detected. Open the Devices section to troubleshoot the connection.")
             return
         if len(devices) == 1:
             self._do_transfer(book, devices[0])
         else:
             self._show_device_picker(book, devices)
 
-    def _show_device_picker(self, book: dict[str, Any], devices: list) -> None:
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("Choose Device")
-        dlg.geometry("340x300")
-        dlg.configure(fg_color=_MAUVE)
-        dlg.transient(self); dlg.grab_set()
-        ctk.CTkLabel(dlg, text="Send to which device? ✨",
-                     font=ctk.CTkFont(size=14, weight="bold"),
-                     text_color=_BLUSH).pack(pady=(15, 10))
+    def _show_device_picker(self, book: dict[str, Any], devices: list[Any]) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Select Device")
+        dialog.geometry("420x340")
+        dialog.configure(fg_color=_SURFACE)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text="Select target device", font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(
+            anchor="w", padx=22, pady=(20, 8)
+        )
+        ctk.CTkLabel(
+            dialog,
+            text=f'Choose where "{book.get("title", "Unknown")}" should be transferred.',
+            font=ctk.CTkFont(size=13),
+            text_color=_TEXT_MUTED,
+            justify="left",
+            wraplength=360,
+        ).pack(anchor="w", padx=22, pady=(0, 14))
+
         for dev in devices:
-            icon = {"ipad": "📱", "ereader": "📖", "mtp": "📖"}.get(dev.kind, "💾")
+            kind = {"ipad": "Tablet", "ereader": "E-Reader", "mtp": "E-Reader (MTP)"}.get(dev.kind, "USB")
             ctk.CTkButton(
-                dlg, text=f"{icon}  {dev.name}", height=36,
-                fg_color=_PINK, hover_color=_PINK_HOVER, corner_radius=12,
-                command=lambda d=dev: (dlg.destroy(), self._do_transfer(book, d)),
-            ).pack(padx=20, pady=3, fill="x")
+                dialog,
+                text=f"{dev.name}  •  {kind}",
+                height=40,
+                fg_color=_CARD_BG,
+                hover_color=_SURFACE_ALT,
+                corner_radius=12,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                text_color=_TEXT,
+                command=lambda d=dev: (dialog.destroy(), self._do_transfer(book, d)),
+            ).pack(fill="x", padx=22, pady=4)
 
     def _do_transfer(self, book: dict[str, Any], device: Any) -> None:
         path = get_book_path(book["id"])
         if not path:
-            self._set_status("💔 File not found in library"); return
+            self._set_status("File not found in library.")
+            return
         try:
-            self._set_status(f"💖 Sent to {device.name}: {copy_to_device(str(path), device)}")
+            result = copy_to_device(str(path), device)
+            self._set_status(f'Transfer completed to {device.name}. {result}')
         except Exception as exc:
-            self._set_status(f"💔 Transfer failed: {exc}")
+            self._set_status(f"Transfer failed: {exc}")
 
-    # ── Devices page ────────────────────────────────────────────────
+    # Devices page
 
     def _show_devices(self) -> None:
+        self._set_active_nav("devices")
         self._clear_content()
 
-        top = ctk.CTkFrame(self.content, fg_color="transparent")
-        top.pack(fill="x", padx=20, pady=(15, 10))
-
-        ctk.CTkLabel(top, text="📱 Connected Devices",
-                     font=ctk.CTkFont(size=22, weight="bold"),
-                     text_color=_BLUSH).pack(side="left")
-
-        ctk.CTkButton(top, text="⟳ Scan", width=90, height=32,
-                      fg_color=_PINK, hover_color=_PINK_HOVER,
-                      corner_radius=12,
-                      command=self._show_devices).pack(side="right")
-
-        # Inline status line
-        self.inline_status = ctk.CTkLabel(self.content, text="🔍 Scanning for devices…",
-                                          font=ctk.CTkFont(size=12),
-                                          text_color=_SOFT_GRAY, anchor="w")
-        self.inline_status.pack(fill="x", padx=22, pady=(0, 2))
-        self.update_idletasks()
-
+        self._create_header("Devices", "Review connected reading devices, install MTP support and run connection diagnostics.", "Scan", self._show_devices)
         devices = detect_devices()
+        self._summary_row(self._device_summary_items(devices))
+
+        self.inline_status = ctk.CTkLabel(
+            self.content,
+            text="Connection scan complete.",
+            font=ctk.CTkFont(size=12),
+            text_color=_TEXT_SOFT,
+            anchor="w",
+        )
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
+        self.update_idletasks()
 
         if not devices:
             from app.devices import _has_mtp_tools
+
             mtp_ok = _has_mtp_tools()
             is_sequoia = platform.system() == "Darwin" and int(platform.mac_ver()[0].split(".")[0]) >= 13
 
-            msg = ("No e-readers or tablets detected 💔\n\n"
-                   "• Use a data cable (not charge-only)\n"
-                   "• Unlock the device and accept any USB prompt\n"
-                   "• Connect iPad → trust this computer")
-
+            message = (
+                "No e-reader or tablet was detected. Verify that the device is unlocked, connected with a data cable, "
+                "and trusted by the computer if applicable."
+            )
             if is_sequoia:
-                msg += ("\n\n🔒 macOS USB Security\n"
-                        "macOS may block new USB accessories.\n"
-                        "Go to System Settings → Privacy & Security\n"
-                        "→ scroll down → set \"Allow accessories to\n"
-                        "connect\" to \"Automatically When Unlocked\".\n"
-                        "Then unplug & replug the cable.")
-
+                message += " On recent macOS versions, USB accessory approval in Privacy & Security may also block discovery."
             if not mtp_ok:
-                msg += ("\n\n⚠ MTP support not installed.\n"
-                        "Newer Kindles (fw 5.16+) need MTP. Click below.")
+                message += " Newer Kindle firmware often requires MTP support to be installed."
 
-            ctk.CTkLabel(self.content, text=msg,
-                         font=ctk.CTkFont(size=14), text_color=_SOFT_GRAY,
-                         justify="left").pack(pady=(20, 10), padx=30, anchor="w")
+            self._show_empty_state("No devices detected", message)
 
-            btn_row = ctk.CTkFrame(self.content, fg_color="transparent")
-            btn_row.pack(fill="x", padx=30, pady=5, anchor="w")
+            action_row = ctk.CTkFrame(self.content, fg_color="transparent")
+            action_row.pack(fill="x", padx=28, pady=(0, 20))
 
             if not mtp_ok:
                 ctk.CTkButton(
-                    btn_row, text="📦 Install MTP Support",
-                    width=200, height=36,
-                    fg_color=_PINK, hover_color=_PINK_HOVER,
-                    corner_radius=12,
+                    action_row,
+                    text="Install MTP Support",
+                    width=180,
+                    height=38,
+                    fg_color=_ACCENT,
+                    hover_color=_ACCENT_HOVER,
+                    corner_radius=14,
+                    text_color=_TEXT,
                     command=self._install_mtp,
-                ).pack(side="left", padx=(0, 8))
+                ).pack(side="left", padx=(0, 10))
 
             ctk.CTkButton(
-                btn_row, text="🔌 USB Troubleshooter",
-                width=190, height=36,
-                fg_color=_ROSE, hover_color=_ROSE_DARK,
-                corner_radius=12,
+                action_row,
+                text="Run USB Diagnostics",
+                width=180,
+                height=38,
+                fg_color=_SURFACE,
+                hover_color=_SURFACE_ALT,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                corner_radius=14,
+                text_color=_TEXT,
                 command=self._run_usb_troubleshoot,
-            ).pack(side="left", padx=(0, 8))
+            ).pack(side="left")
 
-            self._set_status("No devices found 💔")
+            self._set_status("No device detected.")
             return
 
-        self._set_status(f"✨ Found {len(devices)} device(s)")
+        self._set_status(f"{len(devices)} device(s) detected.")
 
-        scroll = ScrollableFrame(self.content, fg_color=_BG_DARK)
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+        scroll = ScrollableFrame(self.content, fg_color=_APP_BG)
+        scroll.pack(fill="both", expand=True, padx=28, pady=(0, 18))
 
-        _KIND = {
-            "ereader": ("📖", "E-Reader"),
-            "ipad": ("📱", "iPad / iPhone"),
-            "mtp": ("📖", "E-Reader (MTP)"),
+        kind_map = {
+            "ereader": "E-Reader",
+            "ipad": "Tablet / Phone",
+            "mtp": "E-Reader (MTP)",
         }
         for dev in devices:
-            card = ctk.CTkFrame(scroll.inner, corner_radius=14,
-                                fg_color=_MAUVE, border_width=1, border_color=_ROSE)
-            card.pack(fill="x", pady=4, padx=2)
-            icon, kind_name = _KIND.get(dev.kind, ("💾", "USB Drive"))
-            ctk.CTkLabel(card, text=icon, font=ctk.CTkFont(size=32),
-                         width=60).pack(side="left", padx=10, pady=10)
-            info = ctk.CTkFrame(card, fg_color="transparent")
-            info.pack(side="left", fill="both", expand=True, padx=8, pady=10)
-            ctk.CTkLabel(info, text=dev.name, font=ctk.CTkFont(size=15, weight="bold"),
-                         anchor="w", text_color=_BLUSH).pack(anchor="w")
-            ctk.CTkLabel(info, text=kind_name, font=ctk.CTkFont(size=12),
-                         text_color=_SOFT_GRAY, anchor="w").pack(anchor="w")
+            card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            card.pack(fill="x", pady=6, padx=2)
+
+            left = ctk.CTkFrame(card, fg_color="transparent")
+            left.pack(side="left", fill="both", expand=True, padx=18, pady=16)
+            ctk.CTkLabel(left, text=dev.name, font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w")
+            ctk.CTkLabel(left, text=kind_map.get(dev.kind, "USB Storage"), font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED).pack(
+                anchor="w", pady=(4, 10)
+            )
+
+            badges = ctk.CTkFrame(left, fg_color="transparent")
+            badges.pack(anchor="w", pady=(0, 10))
+            self._make_badge(badges, kind_map.get(dev.kind, "USB Storage"), _ACCENT_SOFT)
             if dev.mount_point:
-                path_text = f"Path: {dev.mount_point}"
-                path_color = _LAVENDER
+                self._make_badge(badges, "Mounted", _SUCCESS)
             elif dev.kind == "mtp":
-                path_text = "Connected via MTP – file transfer supported ✓"
-                path_color = _LAVENDER
+                self._make_badge(badges, "MTP Ready", _SUCCESS)
             else:
-                path_text = "Not directly mountable – use Finder/iTunes"
-                path_color = _GOLD
-            ctk.CTkLabel(info, text=path_text, font=ctk.CTkFont(size=11),
-                         text_color=path_color, anchor="w").pack(anchor="w")
+                self._make_badge(badges, "Manual Access", _SURFACE_ALT)
+
+            path_text = dev.mount_point or "No direct mount point available"
+            ctk.CTkLabel(left, text=path_text, font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w", wraplength=720).pack(
+                anchor="w"
+            )
             if dev.status:
-                ctk.CTkLabel(info, text=f"⚠ {dev.status}",
-                             font=ctk.CTkFont(size=11),
-                             text_color=_GOLD, anchor="w",
-                             wraplength=350).pack(anchor="w", pady=(2, 0))
+                ctk.CTkLabel(left, text=dev.status, font=ctk.CTkFont(size=12), text_color=_WARNING, anchor="w", wraplength=720).pack(
+                    anchor="w", pady=(8, 0)
+                )
 
     def _install_mtp(self) -> None:
-        """Install libmtp via Homebrew for MTP device support."""
         import shutil as _shutil
+
         if not _shutil.which("brew"):
-            self._set_status("💔 Homebrew not found – install from brew.sh first")
+            self._set_status("Homebrew not found. Install Homebrew first to add MTP support.")
             return
-        self._set_status("📦 Installing MTP support…")
+
+        self._set_status("Installing MTP support via Homebrew...")
         self.update_idletasks()
 
         def _do_install() -> None:
             try:
-                import subprocess as _sp
-                _sp.run(["brew", "install", "libmtp"],
-                        capture_output=True, timeout=120)
-                self.after(0, lambda: (
-                    self._set_status("✨ MTP support installed! Click Scan."),
-                ))
-            except Exception as e:
-                self.after(0, lambda: self._set_status(f"💔 Install failed: {e}"))
+                subprocess.run(["brew", "install", "libmtp"], capture_output=True, timeout=120)
+                self.after(0, lambda: self._set_status("MTP support installed. Run a new device scan."))
+            except Exception as exc:
+                self.after(0, lambda: self._set_status(f"Install failed: {exc}"))
 
         threading.Thread(target=_do_install, daemon=True).start()
 
-    # ── USB Troubleshooter ──────────────────────────────────────────
+    # Diagnostics
 
     def _run_usb_troubleshoot(self) -> None:
-        """Run USB diagnostics and show results in a dialog."""
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("USB Troubleshooter")
-        dlg.geometry("520x440")
-        dlg.configure(fg_color=_BG_DARK)
-        dlg.transient(self); dlg.grab_set()
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("USB Diagnostics")
+        dialog.geometry("620x500")
+        dialog.configure(fg_color=_APP_BG)
+        dialog.transient(self)
+        dialog.grab_set()
 
-        ctk.CTkLabel(dlg, text="🔌 USB Troubleshooter",
-                     font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=_BLUSH).pack(pady=(15, 5))
+        ctk.CTkLabel(dialog, text="USB Diagnostics", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(
+            anchor="w", padx=20, pady=(18, 6)
+        )
+        ctk.CTkLabel(
+            dialog,
+            text="The report checks the USB bus, MTP tooling and mounted volumes to help explain why a reader may not appear.",
+            font=ctk.CTkFont(size=13),
+            text_color=_TEXT_MUTED,
+            justify="left",
+            wraplength=560,
+        ).pack(anchor="w", padx=20, pady=(0, 12))
 
-        result_text = ctk.CTkTextbox(dlg, fg_color=_MAUVE, text_color=_BLUSH,
-                                     font=ctk.CTkFont(family="Menlo", size=12),
-                                     corner_radius=10, wrap="word")
-        result_text.pack(fill="both", expand=True, padx=15, pady=10)
-        result_text.insert("end", "Running diagnostics…\n")
-        dlg.update_idletasks()
+        result_text = ctk.CTkTextbox(
+            dialog,
+            fg_color=_SURFACE,
+            text_color=_TEXT,
+            font=ctk.CTkFont(family="Menlo", size=12),
+            corner_radius=16,
+            wrap="word",
+        )
+        result_text.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        result_text.insert("end", "Running diagnostics...\n")
+        dialog.update_idletasks()
 
         def _diagnose() -> str:
             lines: list[str] = []
-            # 1. USB bus
             try:
-                out = subprocess.check_output(
-                    ["system_profiler", "SPUSBDataType", "-detailLevel", "mini"],
-                    text=True, timeout=5)
-                usb_devs = [l.strip().rstrip(":") for l in out.splitlines()
-                            if l.strip().endswith(":") and ":" not in l.strip()[:-1]
-                            and "USB" not in l.strip() and "Host" not in l.strip()]
+                out = subprocess.check_output(["system_profiler", "SPUSBDataType", "-detailLevel", "mini"], text=True, timeout=5)
+                usb_devs = [
+                    line.strip().rstrip(":")
+                    for line in out.splitlines()
+                    if line.strip().endswith(":") and ":" not in line.strip()[:-1] and "USB" not in line.strip() and "Host" not in line.strip()
+                ]
                 if usb_devs:
-                    lines.append(f"✅ USB devices found: {', '.join(usb_devs)}")
+                    lines.append(f"[OK] USB devices found: {', '.join(usb_devs)}")
                 else:
-                    lines.append("❌ No USB devices found on the bus")
+                    lines.append("[FAIL] No USB devices found on the bus.")
 
-                has_kindle = any("kindle" in d.lower() or "amazon" in d.lower()
-                                 for d in usb_devs)
-                if has_kindle:
-                    lines.append("✅ Kindle detected on USB bus!")
-                else:
-                    lines.append("❌ Kindle NOT on USB bus")
+                has_kindle = any("kindle" in dev.lower() or "amazon" in dev.lower() for dev in usb_devs)
+                lines.append("[OK] Kindle detected on USB bus." if has_kindle else "[FAIL] Kindle not visible on USB bus.")
             except Exception:
-                lines.append("⚠ Could not scan USB bus")
+                lines.append("[WARN] Could not scan the USB bus.")
 
-            # 2. MTP tools
             import shutil
+
             if shutil.which("mtp-detect"):
-                lines.append("✅ libmtp is installed")
+                lines.append("[OK] libmtp is installed.")
                 try:
-                    out = subprocess.check_output(
-                        ["mtp-detect"], text=True, stderr=subprocess.STDOUT,
-                        timeout=10)
+                    out = subprocess.check_output(["mtp-detect"], text=True, stderr=subprocess.STDOUT, timeout=10)
                     if "1949" in out or "kindle" in out.lower() or "amazon" in out.lower():
-                        lines.append("✅ Kindle found via MTP!")
+                        lines.append("[OK] Kindle-like device found via MTP.")
                     elif "No raw devices" in out:
-                        lines.append("❌ mtp-detect: No MTP devices found")
+                        lines.append("[FAIL] mtp-detect did not find any MTP devices.")
                     else:
-                        lines.append(f"⚠ mtp-detect: {out.strip()[:100]}")
+                        lines.append(f"[WARN] mtp-detect response: {out.strip()[:100]}")
                 except Exception:
-                    lines.append("⚠ mtp-detect timed out")
+                    lines.append("[WARN] mtp-detect timed out.")
             else:
-                lines.append("❌ libmtp not installed (run: brew install libmtp)")
+                lines.append("[FAIL] libmtp is not installed. Run: brew install libmtp")
 
-            # 3. Mounted volumes
-            vols = [v for v in Path("/Volumes").iterdir()
-                    if v.is_dir() and v.name.lower() not in
-                    {"macintosh hd", "macintosh hd - data", "recovery"}]
-            if vols:
-                lines.append(f"✅ Mounted volumes: {', '.join(v.name for v in vols)}")
-            else:
-                lines.append("❌ No external volumes mounted")
+            from pathlib import Path
 
-            # 4. macOS USB security
             try:
-                ver = int(platform.mac_ver()[0].split(".")[0])
-                if ver >= 13:
+                volumes = [
+                    volume
+                    for volume in Path("/Volumes").iterdir()
+                    if volume.is_dir() and volume.name.lower() not in {"macintosh hd", "macintosh hd - data", "recovery"}
+                ]
+            except Exception:
+                volumes = []
+
+            if volumes:
+                lines.append(f"[OK] Mounted external volumes: {', '.join(v.name for v in volumes)}")
+            else:
+                lines.append("[FAIL] No external volumes are mounted.")
+
+            try:
+                version = int(platform.mac_ver()[0].split(".")[0])
+                if version >= 13:
                     lines.append("")
-                    lines.append("🔒 macOS USB Accessory Security is active")
-                    lines.append("   This may silently block new USB devices.")
-                    lines.append("   Fix: System Settings → Privacy & Security")
-                    lines.append('   → "Allow accessories" → "Automatically"')
-                    lines.append("   Then unplug & replug the Kindle.")
+                    lines.append("macOS USB accessory approval can block new readers.")
+                    lines.append("Check: System Settings > Privacy & Security > Allow accessories to connect.")
+                # no else branch needed
             except Exception:
                 pass
 
-            # 5. General tips
             lines.append("")
-            lines.append("📋 Troubleshooting steps:")
-            lines.append("  1. Use the ORIGINAL Kindle USB cable")
-            lines.append("  2. Plug directly into Mac (no hub/adapter)")
-            lines.append("  3. Unlock the Kindle screen")
-            lines.append("  4. If using USB-C adapter, try a different one")
-            lines.append("  5. Restart the Kindle (hold power 20s)")
-            lines.append("  6. Try a different USB port")
-            lines.append("")
-            lines.append("💌 Alternative: Use Send-to-Kindle email")
-            lines.append("   (set up in the Devices tab below)")
-
+            lines.append("Recommended next steps:")
+            lines.append("1. Use a verified data cable and plug directly into the computer.")
+            lines.append("2. Unlock the reader and accept any trust or USB prompts.")
+            lines.append("3. Reconnect the cable after changing macOS USB accessory settings.")
+            lines.append("4. Install libmtp if the device uses MTP instead of USB mass storage.")
             return "\n".join(lines)
 
         def _run() -> None:
             report = _diagnose()
-            self.after(0, lambda: (
-                result_text.delete("1.0", "end"),
-                result_text.insert("end", report),
-            ))
+            self.after(
+                0,
+                lambda: (
+                    result_text.delete("1.0", "end"),
+                    result_text.insert("end", report),
+                ),
+            )
 
         threading.Thread(target=_run, daemon=True).start()
 
