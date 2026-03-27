@@ -487,6 +487,41 @@ def clear_finished_queue_jobs() -> int:
     return removed
 
 
+def cancel_download_job(job_id: str) -> dict[str, Any] | None:
+    return update_download_job(job_id, status="cancelled")
+
+
+def retry_download_job(job_id: str) -> dict[str, Any] | None:
+    return update_download_job(job_id, status="queued", message="")
+
+
+def reorder_download_job(job_id: str, direction: str) -> list[dict[str, Any]]:
+    queue = get_download_queue()
+    index = next((idx for idx, item in enumerate(queue) if item.get("id") == job_id), None)
+    if index is None:
+        return queue
+    if direction == "up" and index > 0:
+        queue[index - 1], queue[index] = queue[index], queue[index - 1]
+    elif direction == "down" and index < len(queue) - 1:
+        queue[index + 1], queue[index] = queue[index], queue[index + 1]
+    _write_json(QUEUE_FILE, queue)
+    return queue
+
+
+def get_search_cache_stats() -> dict[str, int]:
+    files = list(SEARCH_CACHE_DIR.glob("*.json"))
+    total_bytes = sum(path.stat().st_size for path in files if path.exists())
+    return {"entries": len(files), "bytes": total_bytes}
+
+
+def clear_search_cache() -> int:
+    removed = 0
+    for path in SEARCH_CACHE_DIR.glob("*.json"):
+        path.unlink(missing_ok=True)
+        removed += 1
+    return removed
+
+
 def get_device_profiles() -> list[dict[str, str]]:
     profiles = get_settings().get("device_profiles", [])
     if not isinstance(profiles, list) or not profiles:

@@ -18,11 +18,14 @@ import requests
 from PIL import Image
 
 from app.devices import copy_to_device, detect_devices
+from app.document_tools import convert_book_format, export_library_web_preview, repair_book_file, run_ocr_for_book
 from app.library import (
     LIBRARY_DIR,
     add_to_library,
     apply_bulk_update,
+    cancel_download_job,
     clear_finished_queue_jobs,
+    clear_search_cache,
     delete_books,
     enqueue_download_job,
     export_library_snapshot,
@@ -36,6 +39,7 @@ from app.library import (
     import_library_snapshot,
     generate_companion_feed,
     get_recommendations,
+    get_search_cache_stats,
     get_settings,
     get_transfer_history,
     get_usage_events,
@@ -50,9 +54,11 @@ from app.library import (
     save_device_profile,
     save_search_cache,
     scan_library_health,
+    reorder_download_job,
     record_download_history,
     record_transfer_history,
     remove_from_library,
+    retry_download_job,
     search_books_in_library,
     set_book_collections,
     set_book_notes_and_tags,
@@ -63,6 +69,7 @@ from app.library import (
     update_settings,
     delete_device_profile,
 )
+from app.ai_tools import ai_enrich_book, ai_is_configured
 from app.logging_utils import LOG_FILE, log_exception, log_info, setup_logging
 from app.search import BookResult, book_result_from_dict, book_result_to_dict, download_link_from_dict, resolve_external_download, search_books
 
@@ -137,6 +144,15 @@ _I18N = {
         "Recent usage events": "Recent usage events",
         "Interface language": "Interface language",
         "Enable local usage telemetry": "Enable local usage telemetry",
+        "Open File": "Open File",
+        "Send to Device": "Send to Device",
+        "Remove": "Remove",
+        "Edit": "Edit",
+        "Repair": "Repair",
+        "Run OCR": "Run OCR",
+        "Convert": "Convert",
+        "AI Enrich": "AI Enrich",
+        "Library Health Scan": "Library Health Scan",
     },
     "Turkish": {
         "Catalog Search": "Katalog Arama",
@@ -150,6 +166,15 @@ _I18N = {
         "Recent usage events": "Son kullanım olayları",
         "Interface language": "Arayüz dili",
         "Enable local usage telemetry": "Yerel kullanım telemetrisini etkinleştir",
+        "Open File": "Dosyayı Aç",
+        "Send to Device": "Cihaza Gönder",
+        "Remove": "Kaldır",
+        "Edit": "Düzenle",
+        "Repair": "Onar",
+        "Run OCR": "OCR Çalıştır",
+        "Convert": "Dönüştür",
+        "AI Enrich": "AI Zenginleştir",
+        "Library Health Scan": "Kütüphane Sağlık Taraması",
     },
 }
 
@@ -596,6 +621,36 @@ class AutoBookApp(ctk.CTk):
             log_exception("Queue cleanup failed")
             self._set_status("Could not clear finished queue items.")
 
+    def _queue_cancel(self, job_id: str) -> None:
+        try:
+            cancel_download_job(job_id)
+            self._track("queue_cancelled", job_id=job_id)
+            self._show_history()
+            self._set_status("Queue item cancelled.")
+        except Exception:
+            log_exception("Queue cancel failed")
+            self._set_status("Could not cancel queue item.")
+
+    def _queue_retry(self, job_id: str) -> None:
+        try:
+            retry_download_job(job_id)
+            self._track("queue_retried", job_id=job_id)
+            self._show_history()
+            self._set_status("Queue item set back to queued.")
+        except Exception:
+            log_exception("Queue retry failed")
+            self._set_status("Could not retry queue item.")
+
+    def _queue_reorder(self, job_id: str, direction: str) -> None:
+        try:
+            reorder_download_job(job_id, direction)
+            self._track("queue_reordered", job_id=job_id, direction=direction)
+            self._show_history()
+            self._set_status("Queue order updated.")
+        except Exception:
+            log_exception("Queue reorder failed")
+            self._set_status("Could not reorder queue item.")
+
     def _create_header(self, title: str, subtitle: str, action_text: str | None = None, action_command: Callable[[], None] | None = None) -> None:
         header = ctk.CTkFrame(self.content, fg_color="transparent")
         header.pack(fill="x", padx=28, pady=(14, 8))
@@ -679,6 +734,22 @@ class AutoBookApp(ctk.CTk):
             padx=10,
             pady=4,
         ).pack(side="left", padx=(0, 8))
+
+    def _render_stat_bars(self, parent: Any, values: dict[str, int]) -> None:
+        if not values:
+            ctk.CTkLabel(parent, text="No data yet.", font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED).pack(anchor="w", padx=18, pady=(0, 16))
+            return
+        top = max(values.values()) if values else 1
+        for key, count in values.items():
+            row = ctk.CTkFrame(parent, fg_color="transparent")
+            row.pack(fill="x", padx=18, pady=5)
+            ctk.CTkLabel(row, text=str(key), font=ctk.CTkFont(size=13), text_color=_TEXT, width=180, anchor="w").pack(side="left")
+            bar_wrap = ctk.CTkFrame(row, fg_color="transparent")
+            bar_wrap.pack(side="left", fill="x", expand=True, padx=(0, 12))
+            ctk.CTkProgressBar(bar_wrap, progress_color=_ACCENT, fg_color=_CARD_BG).pack(fill="x")
+            progress = bar_wrap.winfo_children()[0]
+            progress.set(0 if top == 0 else count / top)
+            ctk.CTkLabel(row, text=str(count), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_MUTED, width=48, anchor="e").pack(side="right")
 
     def _estimated_content_width(self, fallback: int = 1100) -> int:
         width = self.content.winfo_width() if hasattr(self, "content") else 0
@@ -1396,11 +1467,15 @@ class AutoBookApp(ctk.CTk):
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.grid(row=0, column=2, padx=16, pady=16, sticky="ne")
         for text, cmd, fg, hover in [
-            ("Edit", lambda b=book: self._edit_book_details(b["id"]), _SURFACE_ALT, _CARD_BG),
-            ("Open File", lambda b=book: self._open_book_file(b), _ACCENT, _ACCENT_HOVER),
+            (self._t("Edit"), lambda b=book: self._edit_book_details(b["id"]), _SURFACE_ALT, _CARD_BG),
+            (self._t("Open File"), lambda b=book: self._open_book_file(b), _ACCENT, _ACCENT_HOVER),
             ("Collections", lambda b=book: self._edit_collections(b["id"]), _SURFACE_ALT, _CARD_BG),
-            ("Send to Device", lambda b=book: self._send_to_device(b), _SURFACE_ALT, _CARD_BG),
-            ("Remove", lambda b=book: self._delete_book(b), _DANGER, _DANGER_HOVER),
+            (self._t("Send to Device"), lambda b=book: self._send_to_device(b), _SURFACE_ALT, _CARD_BG),
+            (self._t("Repair"), lambda b=book: self._repair_book(b["id"]), _SURFACE_ALT, _CARD_BG),
+            (self._t("Run OCR"), lambda b=book: self._run_book_ocr(b["id"]), _SURFACE_ALT, _CARD_BG),
+            (self._t("Convert"), lambda b=book: self._convert_book(b["id"]), _SURFACE_ALT, _CARD_BG),
+            (self._t("AI Enrich"), lambda b=book: self._ai_enrich_book(b["id"]), _SURFACE_ALT, _CARD_BG),
+            (self._t("Remove"), lambda b=book: self._delete_book(b), _DANGER, _DANGER_HOVER),
         ]:
             ctk.CTkButton(
                 actions,
@@ -1636,6 +1711,66 @@ class AutoBookApp(ctk.CTk):
         ctk.CTkButton(actions, text="Cancel", fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, width=100, text_color=_TEXT, command=dialog.destroy).pack(side="left", padx=(0, 8))
         ctk.CTkButton(actions, text="Remove", fg_color=_DANGER, hover_color=_DANGER_HOVER, corner_radius=12, width=100, text_color=_TEXT, command=_confirm).pack(side="left")
 
+    def _repair_book(self, book_id: str) -> None:
+        try:
+            result = repair_book_file(book_id)
+            self._track("book_repaired", book_id=book_id, status=result.get("status", "unknown"))
+            self._set_status(result.get("message", "Repair finished."))
+            self._notify("AutoBook", result.get("message", "Repair finished."))
+        except Exception as exc:
+            log_exception("Book repair failed")
+            self._set_status(f"Repair failed: {exc}")
+
+    def _run_book_ocr(self, book_id: str) -> None:
+        self._set_status("Running OCR...")
+        self.update_idletasks()
+
+        def _work() -> dict[str, Any]:
+            return run_ocr_for_book(book_id)
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("book_ocr", book_id=book_id, chars=result.get("chars", 0))
+            self._set_status(f"OCR completed. Output: {result.get('output', '')}")
+            self._notify("AutoBook", "OCR completed.")
+            self._refresh_library_results()
+
+        self._run_background(_work, _done, user_error="OCR failed.")
+
+    def _convert_book(self, book_id: str) -> None:
+        dialog = ctk.CTkInputDialog(text="Target format: epub, pdf, or txt", title="Convert Book")
+        target = (dialog.get_input() or "").strip().lower()
+        if not target:
+            return
+        self._set_status(f"Converting book to {target.upper()}...")
+        self.update_idletasks()
+
+        def _work() -> dict[str, Any]:
+            return convert_book_format(book_id, target)
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("book_converted", book_id=book_id, format=result.get("format", target.upper()))
+            self._set_status(f"Conversion completed: {result.get('output', '')}")
+            self._notify("AutoBook", f"Conversion completed to {result.get('format', target.upper())}.")
+
+        self._run_background(_work, _done, user_error="Conversion failed.")
+
+    def _ai_enrich_book(self, book_id: str) -> None:
+        if not ai_is_configured():
+            self._set_status("OPENAI_API_KEY is not configured for AI enrichment.")
+            return
+        self._set_status("Generating AI enrichment...")
+        self.update_idletasks()
+
+        def _work() -> dict[str, Any]:
+            return ai_enrich_book(book_id)
+
+        def _done(result: dict[str, Any]) -> None:
+            self._track("ai_enrichment", book_id=book_id)
+            self._set_status(f"AI enrichment updated {len(result.get('categories', []))} categories.")
+            self._refresh_library_results()
+
+        self._run_background(_work, _done, user_error="AI enrichment failed.")
+
     # History page
 
     def _show_history(self) -> None:
@@ -1661,6 +1796,12 @@ class AutoBookApp(ctk.CTk):
                 row.pack(fill="x", padx=18, pady=4)
                 title = item.get("book", {}).get("title", "Queued title") if isinstance(item.get("book"), dict) else "Queued title"
                 ctk.CTkLabel(row, text=f"{title}  |  {item.get('link', {}).get('format', '').upper()}", font=ctk.CTkFont(size=12), text_color=_TEXT).pack(side="left")
+                controls = ctk.CTkFrame(row, fg_color="transparent")
+                controls.pack(side="right")
+                ctk.CTkButton(controls, text="Up", width=42, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_reorder(job_id, "up")).pack(side="left", padx=(6, 0))
+                ctk.CTkButton(controls, text="Down", width=54, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_reorder(job_id, "down")).pack(side="left", padx=(6, 0))
+                ctk.CTkButton(controls, text="Retry", width=54, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_retry(job_id)).pack(side="left", padx=(6, 0))
+                ctk.CTkButton(controls, text="Cancel", width=62, height=28, fg_color=_DANGER if item.get("status") == "queued" else _SURFACE_ALT, hover_color=_DANGER_HOVER if item.get("status") == "queued" else _CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_cancel(job_id)).pack(side="left", padx=(6, 0))
                 self._make_badge(row, item.get("status", "queued").upper(), _SURFACE_ALT if item.get("status") == "queued" else (_SUCCESS if item.get("status") == "success" else _DANGER))
         else:
             ctk.CTkLabel(queue_panel, text="No queued downloads.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=18, pady=(0, 14))
@@ -1715,14 +1856,7 @@ class AutoBookApp(ctk.CTk):
             card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
             card.pack(fill="x", padx=2, pady=6)
             ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(16, 12))
-            if not values:
-                ctk.CTkLabel(card, text="No data yet.", font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED).pack(anchor="w", padx=18, pady=(0, 16))
-                continue
-            for key, count in values.items():
-                row = ctk.CTkFrame(card, fg_color="transparent")
-                row.pack(fill="x", padx=18, pady=4)
-                ctk.CTkLabel(row, text=str(key), font=ctk.CTkFont(size=13), text_color=_TEXT).pack(side="left")
-                ctk.CTkLabel(row, text=str(count), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_MUTED).pack(side="right")
+            self._render_stat_bars(card, values)
 
         trending = analytics.get("trending_titles", [])
         if trending:
@@ -2157,11 +2291,18 @@ class AutoBookApp(ctk.CTk):
         diagnostics_panel.pack(fill="x", padx=18, pady=(0, 12))
         ctk.CTkLabel(diagnostics_panel, text="Tooling and extensions", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
         tooling = get_optional_tooling()
+        cache_stats = get_search_cache_stats()
         plugins = list_local_plugins()
         ctk.CTkLabel(diagnostics_panel, text=f"Tesseract: {'Ready' if tooling['tesseract'] else 'Missing'}  |  Pandoc: {'Ready' if tooling['pandoc'] else 'Missing'}  |  ebook-convert: {'Ready' if tooling['ebook-convert'] else 'Missing'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
+        ctk.CTkLabel(diagnostics_panel, text=f"AI provider: {'Configured' if ai_is_configured() else 'Missing OPENAI_API_KEY'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
+        ctk.CTkLabel(diagnostics_panel, text=f"Offline cache: {cache_stats['entries']} entries  |  {cache_stats['bytes']} bytes", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
         ctk.CTkLabel(diagnostics_panel, text=f"Local plugins: {len(plugins)}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
         for plugin in plugins[:4]:
             ctk.CTkLabel(diagnostics_panel, text=f"{plugin['name']} {plugin['version']}  |  {plugin['description']}", font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", padx=14, pady=2)
+        diag_actions = ctk.CTkFrame(diagnostics_panel, fg_color="transparent")
+        diag_actions.pack(fill="x", padx=14, pady=(8, 12))
+        ctk.CTkButton(diag_actions, text="Clear Cache", width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
+        ctk.CTkButton(diag_actions, text="Web Preview", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._generate_web_preview).pack(side="left", padx=(10, 0))
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
         action_row.pack(fill="x", padx=18, pady=(0, 16))
@@ -2277,6 +2418,25 @@ class AutoBookApp(ctk.CTk):
             log_exception("Companion feed generation failed")
             self._set_status("Companion feed generation failed. Check the log for details.")
 
+    def _generate_web_preview(self) -> None:
+        try:
+            path = export_library_web_preview()
+            self._track("web_preview_generated", filename=path.name)
+            self._set_status(f"Web preview data generated: {path.name}")
+        except Exception:
+            log_exception("Web preview generation failed")
+            self._set_status("Web preview generation failed. Check the log for details.")
+
+    def _clear_offline_cache(self) -> None:
+        try:
+            removed = clear_search_cache()
+            self._track("cache_cleared", removed=removed)
+            self._set_status(f"Cleared {removed} cached search entries.")
+            self._show_settings()
+        except Exception:
+            log_exception("Offline cache cleanup failed")
+            self._set_status("Offline cache cleanup failed.")
+
     def _import_snapshot(self) -> None:
         dialog = ctk.CTkInputDialog(text="Enter the full path to an export JSON file.", title="Import Snapshot")
         path = dialog.get_input()
@@ -2348,19 +2508,44 @@ class AutoBookApp(ctk.CTk):
 
     def _show_health_scan_report(self, results: list[dict[str, Any]]) -> None:
         dialog = ctk.CTkToplevel(self)
-        dialog.title("Library Health Scan")
+        dialog.title(self._t("Library Health Scan"))
         dialog.geometry("720x520")
         dialog.configure(fg_color=_APP_BG)
         dialog.transient(self)
         dialog.grab_set()
-        ctk.CTkLabel(dialog, text="Library Health Scan", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=20, pady=(18, 8))
+        ctk.CTkLabel(dialog, text=self._t("Library Health Scan"), font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=20, pady=(18, 8))
         box = ctk.CTkTextbox(dialog, fg_color=_SURFACE, text_color=_TEXT, corner_radius=16, wrap="word")
         box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        issues = [item for item in results if item["status"] != "healthy"]
+        if issues:
+            ctk.CTkButton(
+                dialog,
+                text="Attempt Repairs",
+                width=140,
+                height=36,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                corner_radius=12,
+                text_color=_TEXT,
+                command=lambda: self._repair_from_scan(issues, box),
+            ).pack(anchor="e", padx=20, pady=(0, 10))
         if not results:
             box.insert("end", "No library items found.")
             return
         for item in results:
             box.insert("end", f"[{item['status'].upper()}] {item['title']} - {item['message']}\n")
+
+    def _repair_from_scan(self, issues: list[dict[str, Any]], output_box: Any) -> None:
+        repaired = 0
+        for item in issues:
+            try:
+                result = repair_book_file(item["id"])
+                repaired += 1 if result.get("status") == "repaired" else 0
+                output_box.insert("end", f"Repair {item['title']}: {result.get('message', '')}\n")
+            except Exception as exc:
+                output_box.insert("end", f"Repair {item['title']}: failed - {exc}\n")
+        self._track("scan_repair_run", repaired=repaired)
+        self._set_status(f"Repair attempt finished. {repaired} item(s) repaired.")
 
     def _open_log_file(self) -> None:
         try:

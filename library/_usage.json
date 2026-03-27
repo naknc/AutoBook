@@ -1,5 +1,109 @@
 [
   {
+    "id": "d0666a9b",
+    "timestamp": "2026-03-27T23:00:44",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "e1b54181",
+    "timestamp": "2026-03-27T23:00:39",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "e937a16e",
+    "timestamp": "2026-03-27T23:00:36",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "02de5722",
+    "timestamp": "2026-03-27T22:59:42",
+    "event": "view_search",
+    "details": {}
+  },
+  {
+    "id": "d504fa87",
+    "timestamp": "2026-03-27T22:59:27",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "8b2cdfc8",
+    "timestamp": "2026-03-27T22:59:23",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "0a7ab3b9",
+    "timestamp": "2026-03-27T22:59:23",
+    "event": "queue_cleared",
+    "details": {
+      "removed": 0
+    }
+  },
+  {
+    "id": "f726e0d6",
+    "timestamp": "2026-03-27T22:59:18",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "7d59ccd5",
+    "timestamp": "2026-03-27T22:59:11",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "e2434ae1",
+    "timestamp": "2026-03-27T22:59:09",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "1ea3ea02",
+    "timestamp": "2026-03-27T22:59:06",
+    "event": "view_settings",
+    "details": {}
+  },
+  {
+    "id": "1c8a359c",
+    "timestamp": "2026-03-27T22:59:04",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "c3a31ed3",
+    "timestamp": "2026-03-27T22:58:59",
+    "event": "view_settings",
+    "details": {}
+  },
+  {
+    "id": "b43c8c58",
+    "timestamp": "2026-03-27T22:58:59",
+    "event": "view_devices",
+    "details": {}
+  },
+  {
+    "id": "7ff52928",
+    "timestamp": "2026-03-27T22:58:57",
+    "event": "view_analytics",
+    "details": {}
+  },
+  {
+    "id": "153bdf19",
+    "timestamp": "2026-03-27T22:58:56",
+    "event": "view_history",
+    "details": {}
+  },
+  {
+    "id": "f29246dc",
+    "timestamp": "2026-03-27T22:58:53",
+    "event": "view_search",
+    "details": {}
+  },
+  {
     "id": "641827e4",
     "timestamp": "2026-03-27T22:47:35",
     "event": "smoke_test",

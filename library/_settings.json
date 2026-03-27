@@ -4,7 +4,7 @@
   "device_subdir": "",
   "default_collection": "",
   "open_library_after_download": true,
-  "library_view": "List",
+  "library_view": "Grid",
   "auto_organize_by": "None",
   "theme_preset": "Corporate Blue",
   "notifications_enabled": true,
