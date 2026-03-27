@@ -1,0 +1,5 @@
+{
+  "name": "Metadata Enricher",
+  "version": "0.1.0",
+  "description": "Sample local plugin manifest for future enrichment hooks."
+}

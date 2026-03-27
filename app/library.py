@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import shutil
 import zipfile
 import uuid
 from collections import Counter
@@ -19,8 +21,15 @@ SETTINGS_FILE = LIBRARY_DIR / "_settings.json"
 HISTORY_FILE = LIBRARY_DIR / "_history.json"
 TRANSFER_HISTORY_FILE = LIBRARY_DIR / "_transfer_history.json"
 USAGE_FILE = LIBRARY_DIR / "_usage.json"
+QUEUE_FILE = LIBRARY_DIR / "_download_queue.json"
+SEARCH_CACHE_DIR = LIBRARY_DIR / "search_cache"
+COMPANION_DIR = LIBRARY_DIR / "companion"
+PLUGINS_DIR = BASE_DIR / "plugins"
 EXPORT_DIR = LIBRARY_DIR / "exports"
 EXPORT_DIR.mkdir(exist_ok=True)
+SEARCH_CACHE_DIR.mkdir(exist_ok=True)
+COMPANION_DIR.mkdir(exist_ok=True)
+PLUGINS_DIR.mkdir(exist_ok=True)
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "preferred_format": "Any",
@@ -35,6 +44,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "allowed_sources": ["Project Gutenberg", "Open Library", "External"],
     "telemetry_enabled": True,
     "interface_language": "English",
+    "allowed_formats": ["EPUB", "PDF"],
+    "search_cache_enabled": True,
+    "search_cache_max_age_hours": 72,
+    "queue_autostart": True,
+    "active_device_profile": "Default",
+    "device_profiles": [{"name": "Default", "subdir": "", "kind": "Generic"}],
 }
 
 
@@ -391,6 +406,173 @@ def get_usage_events(limit: int | None = None) -> list[dict[str, Any]]:
     events = [item for item in data if isinstance(item, dict)]
     events.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
     return events[:limit] if limit is not None else events
+
+
+def _cache_path_for_query(query: str) -> Path:
+    digest = hashlib.sha1(query.strip().lower().encode("utf-8")).hexdigest()[:16]
+    return SEARCH_CACHE_DIR / f"{digest}.json"
+
+
+def load_search_cache(query: str, max_age_hours: int = 72) -> list[dict[str, Any]]:
+    path = _cache_path_for_query(query)
+    payload = _read_json(path, {})
+    if not isinstance(payload, dict):
+        return []
+    timestamp = payload.get("cached_at", "")
+    try:
+        cached_at = datetime.fromisoformat(timestamp)
+    except Exception:
+        return []
+    age = datetime.now() - cached_at
+    if age.total_seconds() > max_age_hours * 3600:
+        return []
+    results = payload.get("results", [])
+    return results if isinstance(results, list) else []
+
+
+def save_search_cache(query: str, results: list[dict[str, Any]]) -> Path:
+    path = _cache_path_for_query(query)
+    _write_json(path, {"cached_at": _now_iso(), "query": query, "results": results})
+    return path
+
+
+def get_download_queue() -> list[dict[str, Any]]:
+    data = _read_json(QUEUE_FILE, [])
+    if not isinstance(data, list):
+        return []
+    return [item for item in data if isinstance(item, dict)]
+
+
+def enqueue_download_job(payload: dict[str, Any]) -> dict[str, Any]:
+    queue = get_download_queue()
+    entry = {
+        "id": str(uuid.uuid4())[:8],
+        "created_at": _now_iso(),
+        "updated_at": _now_iso(),
+        "status": "queued",
+        **payload,
+    }
+    queue.append(entry)
+    _write_json(QUEUE_FILE, queue)
+    return entry
+
+
+def update_download_job(job_id: str, **changes: Any) -> dict[str, Any] | None:
+    queue = get_download_queue()
+    for idx, item in enumerate(queue):
+        if item.get("id") != job_id:
+            continue
+        merged = dict(item)
+        merged.update(changes)
+        merged["updated_at"] = _now_iso()
+        queue[idx] = merged
+        _write_json(QUEUE_FILE, queue)
+        return merged
+    return None
+
+
+def get_next_queued_job() -> dict[str, Any] | None:
+    for item in get_download_queue():
+        if item.get("status") == "queued":
+            return item
+    return None
+
+
+def clear_finished_queue_jobs() -> int:
+    queue = get_download_queue()
+    kept = [item for item in queue if item.get("status") not in {"success", "failed", "cancelled"}]
+    removed = len(queue) - len(kept)
+    if removed:
+        _write_json(QUEUE_FILE, kept)
+    return removed
+
+
+def get_device_profiles() -> list[dict[str, str]]:
+    profiles = get_settings().get("device_profiles", [])
+    if not isinstance(profiles, list) or not profiles:
+        profiles = [{"name": "Default", "subdir": "", "kind": "Generic"}]
+    cleaned = []
+    for item in profiles:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip() or "Profile"
+        cleaned.append({"name": name, "subdir": str(item.get("subdir", "")).strip(), "kind": str(item.get("kind", "Generic")).strip() or "Generic"})
+    return cleaned or [{"name": "Default", "subdir": "", "kind": "Generic"}]
+
+
+def save_device_profile(name: str, subdir: str = "", kind: str = "Generic") -> list[dict[str, str]]:
+    profiles = get_device_profiles()
+    updated = False
+    for profile in profiles:
+        if profile["name"] == name:
+            profile["subdir"] = subdir.strip()
+            profile["kind"] = kind.strip() or "Generic"
+            updated = True
+            break
+    if not updated:
+        profiles.append({"name": name.strip() or "Profile", "subdir": subdir.strip(), "kind": kind.strip() or "Generic"})
+    update_settings(device_profiles=profiles)
+    return profiles
+
+
+def delete_device_profile(name: str) -> list[dict[str, str]]:
+    profiles = [profile for profile in get_device_profiles() if profile["name"] != name]
+    if not profiles:
+        profiles = [{"name": "Default", "subdir": "", "kind": "Generic"}]
+    active = get_settings().get("active_device_profile", "Default")
+    changes: dict[str, Any] = {"device_profiles": profiles}
+    if active == name:
+        changes["active_device_profile"] = profiles[0]["name"]
+    update_settings(**changes)
+    return profiles
+
+
+def get_optional_tooling() -> dict[str, bool]:
+    return {
+        "tesseract": shutil.which("tesseract") is not None,
+        "pandoc": shutil.which("pandoc") is not None,
+        "ebook-convert": shutil.which("ebook-convert") is not None,
+    }
+
+
+def list_local_plugins() -> list[dict[str, str]]:
+    plugins: list[dict[str, str]] = []
+    for path in sorted(PLUGINS_DIR.glob("**/*.json")):
+        payload = _read_json(path, {})
+        if not isinstance(payload, dict):
+            continue
+        plugins.append(
+            {
+                "name": str(payload.get("name", path.stem)),
+                "version": str(payload.get("version", "0.1.0")),
+                "description": str(payload.get("description", "")),
+                "path": str(path.relative_to(BASE_DIR)),
+            }
+        )
+    return plugins
+
+
+def generate_companion_feed() -> Path:
+    books = _load_metadata()
+    payload = {
+        "generated_at": _now_iso(),
+        "book_count": len(books),
+        "books": [
+            {
+                "id": book.get("id", ""),
+                "title": book.get("title", "Unknown"),
+                "author": book.get("author", ""),
+                "summary": book.get("summary", ""),
+                "categories": book.get("auto_categories", []),
+                "format": book.get("format", ""),
+                "favorite": book.get("favorite", False),
+            }
+            for book in books
+        ],
+    }
+    path = COMPANION_DIR / "library_feed.json"
+    _write_json(path, payload)
+    return path
 
 
 def get_download_history(limit: int | None = None) -> list[dict[str, Any]]:

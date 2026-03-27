@@ -1,0 +1,29 @@
+{
+  "generated_at": "2026-03-27T22:55:48",
+  "book_count": 2,
+  "books": [
+    {
+      "id": "b4f4659e",
+      "title": "Animal Farm",
+      "author": "George Orwell",
+      "summary": "Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...",
+      "categories": [
+        "Politics",
+        "Classics"
+      ],
+      "format": "epub",
+      "favorite": false
+    },
+    {
+      "id": "afe43208",
+      "title": "The Little Prince Read-Aloud Storybook",
+      "author": "Antoine De Saint-Exupéry",
+      "summary": "External source file size: 4 MB",
+      "categories": [
+        "General"
+      ],
+      "format": "epub",
+      "favorite": false
+    }
+  ]
+}

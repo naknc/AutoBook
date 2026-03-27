@@ -65,6 +65,52 @@ class BookResult:
     downloads: list[DownloadLink] = field(default_factory=list)
 
 
+def download_link_to_dict(link: DownloadLink) -> dict[str, str]:
+    return {"url": link.url, "format": link.format, "mirror": link.mirror}
+
+
+def download_link_from_dict(payload: dict[str, str]) -> DownloadLink:
+    return DownloadLink(
+        url=str(payload.get("url", "")),
+        format=str(payload.get("format", "")),
+        mirror=str(payload.get("mirror", "")),
+    )
+
+
+def book_result_to_dict(book: BookResult) -> dict[str, object]:
+    return {
+        "title": book.title,
+        "author": book.author,
+        "cover_url": book.cover_url,
+        "year": book.year,
+        "source": book.source,
+        "language": book.language,
+        "rating": book.rating,
+        "ratings_count": book.ratings_count,
+        "description": book.description,
+        "subjects": list(book.subjects),
+        "downloads": [download_link_to_dict(link) for link in book.downloads],
+    }
+
+
+def book_result_from_dict(payload: dict[str, object]) -> BookResult:
+    raw_downloads = payload.get("downloads", [])
+    downloads = [download_link_from_dict(item) for item in raw_downloads if isinstance(item, dict)]
+    return BookResult(
+        title=str(payload.get("title", "Unknown")),
+        author=str(payload.get("author", "")),
+        cover_url=str(payload.get("cover_url", "")),
+        year=str(payload.get("year", "")),
+        source=str(payload.get("source", "")),
+        language=str(payload.get("language", "")),
+        rating=float(payload.get("rating", 0.0) or 0.0),
+        ratings_count=int(payload.get("ratings_count", 0) or 0),
+        description=str(payload.get("description", "")),
+        subjects=[str(item) for item in payload.get("subjects", []) if str(item)],
+        downloads=downloads,
+    )
+
+
 def _clean(text: str) -> str:
     """Collapse whitespace and strip."""
     return re.sub(r"\s+", " ", text).strip()

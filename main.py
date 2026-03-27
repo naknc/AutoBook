@@ -22,22 +22,33 @@ from app.library import (
     LIBRARY_DIR,
     add_to_library,
     apply_bulk_update,
+    clear_finished_queue_jobs,
     delete_books,
+    enqueue_download_job,
     export_library_snapshot,
     get_all_books,
     get_library_analytics,
     get_book,
     get_book_path,
+    get_device_profiles,
     get_download_history,
+    get_download_queue,
     import_library_snapshot,
+    generate_companion_feed,
     get_recommendations,
     get_settings,
     get_transfer_history,
     get_usage_events,
+    get_optional_tooling,
+    get_next_queued_job,
+    list_local_plugins,
     list_collections,
     list_tags,
+    load_search_cache,
     organize_library_files,
     record_usage_event,
+    save_device_profile,
+    save_search_cache,
     scan_library_health,
     record_download_history,
     record_transfer_history,
@@ -48,10 +59,12 @@ from app.library import (
     set_reading_status,
     toggle_favorite,
     update_book,
+    update_download_job,
     update_settings,
+    delete_device_profile,
 )
 from app.logging_utils import LOG_FILE, log_exception, log_info, setup_logging
-from app.search import BookResult, resolve_external_download, search_books
+from app.search import BookResult, book_result_from_dict, book_result_to_dict, download_link_from_dict, resolve_external_download, search_books
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -280,6 +293,7 @@ class AutoBookApp(ctk.CTk):
         self.nav_buttons: dict[str, ctk.CTkButton] = {}
         self.current_search_results: list[BookResult] = []
         self.selected_book_ids: set[str] = set()
+        self.queue_processing = False
         self._build_shell()
         self._show_search()
 
@@ -399,6 +413,188 @@ class AutoBookApp(ctk.CTk):
 
     def _refresh_settings_cache(self) -> None:
         self.settings = get_settings()
+
+    def _allowed_formats(self) -> set[str]:
+        formats = self.settings.get("allowed_formats", ["EPUB", "PDF"])
+        if not isinstance(formats, list):
+            return {"EPUB", "PDF"}
+        return {str(item).upper() for item in formats}
+
+    def _active_device_profile(self) -> dict[str, str]:
+        active = self.settings.get("active_device_profile", "Default")
+        for profile in get_device_profiles():
+            if profile.get("name") == active:
+                return profile
+        return get_device_profiles()[0]
+
+    def _execute_download_job(self, selected_link: Any, book: BookResult) -> tuple[str, str]:
+        allowed_formats = self._allowed_formats()
+        if selected_link.format.upper() not in allowed_formats:
+            raise RuntimeError(f"{selected_link.format.upper()} downloads are disabled by policy.")
+
+        ordered_links = [selected_link] + [link for link in book.downloads if link.url != selected_link.url and link.format == selected_link.format]
+        last_error = "Unknown download error."
+        for link in ordered_links:
+            response = None
+            dest: Path | None = None
+            try:
+                urls = [link.url]
+                if "/ads.php?md5=" in link.url:
+                    resolved = resolve_external_download(link.url)
+                    if resolved:
+                        urls = [resolved]
+                    else:
+                        last_error = "External source could not resolve the direct download link."
+                        continue
+                elif "archive.org" in link.url:
+                    alt = link.url.replace("//dn", "//ia").replace(".ca.archive.org", ".us.archive.org")
+                    if alt != link.url:
+                        urls.append(alt)
+
+                for url in urls:
+                    try:
+                        response = requests.get(url, stream=True, timeout=60, headers=_UA, allow_redirects=True)
+                        if response.status_code >= 400:
+                            last_error = f"Server returned status {response.status_code}."
+                            response.close()
+                            response = None
+                            continue
+                        content_type = response.headers.get("Content-Type", "")
+                        if "text/html" in content_type and link.format in ("epub", "pdf"):
+                            last_error = "Received an HTML page instead of a downloadable file."
+                            response.close()
+                            response = None
+                            continue
+                        break
+                    except requests.RequestException as exc:
+                        last_error = str(exc)
+                        log_exception("Download request failed")
+                        response = None
+                if response is None:
+                    continue
+
+                filename = _safe_filename(book.title, link.format)
+                dest = LIBRARY_DIR / filename
+                index = 1
+                while dest.exists():
+                    filename = _safe_filename(f"{book.title}_{index}", link.format)
+                    dest = LIBRARY_DIR / filename
+                    index += 1
+                with open(dest, "wb") as handle:
+                    wrote_data = False
+                    for chunk in response.iter_content(8192):
+                        if chunk:
+                            handle.write(chunk)
+                            wrote_data = True
+                    if not wrote_data:
+                        raise RuntimeError("No file data was received from the source.")
+                collections: list[str] = []
+                default_collection = self.settings.get("default_collection", "").strip()
+                if default_collection:
+                    collections = [default_collection]
+                add_to_library(
+                    filename,
+                    book.title,
+                    book.author,
+                    link.format,
+                    book.cover_url,
+                    book.source,
+                    language=book.language,
+                    year=book.year,
+                    rating=book.rating,
+                    ratings_count=book.ratings_count,
+                    description=book.description,
+                    subjects=book.subjects,
+                    collections=collections,
+                )
+                record_download_history(
+                    title=book.title,
+                    author=book.author,
+                    source=book.source,
+                    fmt=link.format.upper(),
+                    status="success",
+                    filename=filename,
+                    message="Download completed.",
+                )
+                self._track("download_success", title=book.title, source=book.source, format=link.format.upper())
+                log_info(f"Downloaded book title={book.title!r} format={link.format!r}")
+                return filename, f'"{book.title}" added to the library.'
+            except Exception as exc:
+                log_exception("Download pipeline failed")
+                last_error = str(exc)
+                if dest and dest.exists():
+                    dest.unlink(missing_ok=True)
+            finally:
+                if response is not None:
+                    response.close()
+
+        record_download_history(
+            title=book.title,
+            author=book.author,
+            source=book.source,
+            fmt=selected_link.format.upper(),
+            status="failed",
+            message=last_error,
+        )
+        self._track("download_failed", title=book.title, source=book.source, format=selected_link.format.upper())
+        raise RuntimeError(last_error)
+
+    def _enqueue_download(self, selected_link: Any, book: BookResult) -> None:
+        try:
+            job = enqueue_download_job(
+                {
+                    "book": book_result_to_dict(book),
+                    "link": {
+                        "url": selected_link.url,
+                        "format": selected_link.format,
+                        "mirror": getattr(selected_link, "mirror", ""),
+                    },
+                }
+            )
+            self._track("queue_enqueued", title=book.title, format=selected_link.format.upper())
+            self._set_status(f'Queued "{book.title}" for download.')
+            if self.settings.get("queue_autostart", True):
+                self._start_queue_processing()
+        except Exception:
+            log_exception("Queue enqueue failed")
+            self._set_status("Could not enqueue the download. Check the log for details.")
+
+    def _start_queue_processing(self) -> None:
+        if self.queue_processing:
+            return
+        self.queue_processing = True
+
+        def _runner() -> None:
+            try:
+                while True:
+                    job = get_next_queued_job()
+                    if not job:
+                        break
+                    update_download_job(job["id"], status="running")
+                    book = book_result_from_dict(job.get("book", {}))
+                    link = download_link_from_dict(job.get("link", {}))
+                    try:
+                        _filename, message = self._execute_download_job(link, book)
+                        update_download_job(job["id"], status="success", message=message)
+                        self.after(0, lambda msg=message: self._set_status(msg))
+                    except Exception as exc:
+                        update_download_job(job["id"], status="failed", message=str(exc))
+                        self.after(0, lambda err=str(exc): self._set_status(f"Queued download failed: {err}"))
+            finally:
+                self.queue_processing = False
+
+        threading.Thread(target=_runner, daemon=True, name="download-queue").start()
+
+    def _clear_queue_finished(self) -> None:
+        try:
+            removed = clear_finished_queue_jobs()
+            self._track("queue_cleared", removed=removed)
+            self._set_status(f"Removed {removed} finished queue item(s).")
+            if hasattr(self, "_show_history"):
+                self._show_history()
+        except Exception:
+            log_exception("Queue cleanup failed")
+            self._set_status("Could not clear finished queue items.")
 
     def _create_header(self, title: str, subtitle: str, action_text: str | None = None, action_command: Callable[[], None] | None = None) -> None:
         header = ctk.CTkFrame(self.content, fg_color="transparent")
@@ -706,7 +902,16 @@ class AutoBookApp(ctk.CTk):
 
         def _work() -> list[BookResult]:
             log_info(f"Running search for query={query!r}")
-            return search_books(query, allowed_sources=self.settings.get("allowed_sources", []))
+            results = search_books(query, allowed_sources=self.settings.get("allowed_sources", []))
+            if results and self.settings.get("search_cache_enabled", True):
+                save_search_cache(query, [book_result_to_dict(item) for item in results])
+            if results:
+                return results
+            cached = load_search_cache(query, int(self.settings.get("search_cache_max_age_hours", 72) or 72))
+            if cached:
+                self.after(0, lambda: self._set_status(f'Loaded cached results for "{query}".'))
+                return [book_result_from_dict(item) for item in cached if isinstance(item, dict)]
+            return []
 
         def _done(results: list[BookResult]) -> None:
             self.current_search_results = results
@@ -837,6 +1042,19 @@ class AutoBookApp(ctk.CTk):
                 text_color=_TEXT,
                 command=lambda dl=link, item=book: self._download_book(dl, item),
             ).pack(pady=4)
+            ctk.CTkButton(
+                actions,
+                text=f"Queue {link.format.upper()}",
+                width=172,
+                height=32,
+                fg_color=_SURFACE_ALT,
+                hover_color=_CARD_BG,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                corner_radius=12,
+                text_color=_TEXT,
+                command=lambda dl=link, item=book: self._enqueue_download(dl, item),
+            ).pack(pady=(0, 4))
             if link.mirror:
                 ctk.CTkLabel(actions, text=link.mirror, font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT).pack(pady=(0, 4))
         if not book.downloads:
@@ -847,117 +1065,14 @@ class AutoBookApp(ctk.CTk):
         if book.source and book.source not in self.settings.get("allowed_sources", []):
             self._set_status(f"{book.source} is disabled by source access control.")
             return
+        if selected_link.format.upper() not in self._allowed_formats():
+            self._set_status(f"{selected_link.format.upper()} downloads are disabled by policy.")
+            return
         self._set_status(f'Downloading "{book.title}" as {selected_link.format.upper()}...')
         self.update_idletasks()
 
-        ordered_links = [selected_link] + [link for link in book.downloads if link.url != selected_link.url and link.format == selected_link.format]
-
         def _work() -> tuple[str, str]:
-            last_error = "Unknown download error."
-            for link in ordered_links:
-                response = None
-                dest: Path | None = None
-                try:
-                    urls = [link.url]
-                    if "/ads.php?md5=" in link.url:
-                        resolved = resolve_external_download(link.url)
-                        if resolved:
-                            urls = [resolved]
-                        else:
-                            last_error = "External source could not resolve the direct download link."
-                            continue
-                    elif "archive.org" in link.url:
-                        alt = link.url.replace("//dn", "//ia").replace(".ca.archive.org", ".us.archive.org")
-                        if alt != link.url:
-                            urls.append(alt)
-
-                    for url in urls:
-                        try:
-                            response = requests.get(url, stream=True, timeout=60, headers=_UA, allow_redirects=True)
-                            if response.status_code >= 400:
-                                last_error = f"Server returned status {response.status_code}."
-                                response.close()
-                                response = None
-                                continue
-                            content_type = response.headers.get("Content-Type", "")
-                            if "text/html" in content_type and link.format in ("epub", "pdf"):
-                                last_error = "Received an HTML page instead of a downloadable file."
-                                response.close()
-                                response = None
-                                continue
-                            break
-                        except requests.RequestException as exc:
-                            last_error = str(exc)
-                            log_exception("Download request failed")
-                            response = None
-                    if response is None:
-                        continue
-
-                    filename = _safe_filename(book.title, link.format)
-                    dest = LIBRARY_DIR / filename
-                    index = 1
-                    while dest.exists():
-                        filename = _safe_filename(f"{book.title}_{index}", link.format)
-                        dest = LIBRARY_DIR / filename
-                        index += 1
-                    with open(dest, "wb") as handle:
-                        wrote_data = False
-                        for chunk in response.iter_content(8192):
-                            if chunk:
-                                handle.write(chunk)
-                                wrote_data = True
-                        if not wrote_data:
-                            raise RuntimeError("No file data was received from the source.")
-                    collections: list[str] = []
-                    default_collection = self.settings.get("default_collection", "").strip()
-                    if default_collection:
-                        collections = [default_collection]
-                    add_to_library(
-                        filename,
-                        book.title,
-                        book.author,
-                        link.format,
-                        book.cover_url,
-                        book.source,
-                        language=book.language,
-                        year=book.year,
-                        rating=book.rating,
-                        ratings_count=book.ratings_count,
-                        description=book.description,
-                        subjects=book.subjects,
-                        collections=collections,
-                    )
-                    record_download_history(
-                        title=book.title,
-                        author=book.author,
-                        source=book.source,
-                        fmt=link.format.upper(),
-                        status="success",
-                        filename=filename,
-                        message="Download completed.",
-                    )
-                    self._track("download_success", title=book.title, source=book.source, format=link.format.upper())
-                    log_info(f"Downloaded book title={book.title!r} format={link.format!r}")
-                    return filename, f'"{book.title}" added to the library.'
-                except Exception as exc:
-                    log_exception("Download pipeline failed")
-                    last_error = str(exc)
-                    if dest and dest.exists():
-                        dest.unlink(missing_ok=True)
-                finally:
-                    if response is not None:
-                        response.close()
-
-            record_download_history(
-                title=book.title,
-                author=book.author,
-                source=book.source,
-                fmt=selected_link.format.upper(),
-                status="failed",
-                message=last_error,
-            )
-            self._track("download_failed", title=book.title, source=book.source, format=selected_link.format.upper())
-            raise RuntimeError(last_error)
+            return self._execute_download_job(selected_link, book)
 
         def _done(_result: tuple[str, str]) -> None:
             _, message = _result
@@ -1533,6 +1648,23 @@ class AutoBookApp(ctk.CTk):
         self.inline_status = ctk.CTkLabel(self.content, text=f"{len(history)} history event(s).", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
+        queue_items = get_download_queue()
+        queue_panel = self._make_surface(self.content, (0, 8))
+        queue_row = ctk.CTkFrame(queue_panel, fg_color="transparent")
+        queue_row.pack(fill="x", padx=18, pady=(14, 12))
+        ctk.CTkLabel(queue_row, text="Download queue", font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT).pack(side="left")
+        ctk.CTkButton(queue_row, text="Run Queue", width=110, height=32, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=12, text_color=_TEXT, command=self._start_queue_processing).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(queue_row, text="Clear Finished", width=120, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=12, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._clear_queue_finished).pack(side="right")
+        if queue_items:
+            for item in queue_items[:6]:
+                row = ctk.CTkFrame(queue_panel, fg_color="transparent")
+                row.pack(fill="x", padx=18, pady=4)
+                title = item.get("book", {}).get("title", "Queued title") if isinstance(item.get("book"), dict) else "Queued title"
+                ctk.CTkLabel(row, text=f"{title}  |  {item.get('link', {}).get('format', '').upper()}", font=ctk.CTkFont(size=12), text_color=_TEXT).pack(side="left")
+                self._make_badge(row, item.get("status", "queued").upper(), _SURFACE_ALT if item.get("status") == "queued" else (_SUCCESS if item.get("status") == "success" else _DANGER))
+        else:
+            ctk.CTkLabel(queue_panel, text="No queued downloads.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=18, pady=(0, 14))
+
         if not history:
             self._show_empty_state("No download history yet", "Every download success or failure will appear here so you can quickly inspect what happened.")
             return
@@ -1627,7 +1759,8 @@ class AutoBookApp(ctk.CTk):
         transfers = get_transfer_history(limit=6)
         self._create_header("Devices", "Review connected reading devices, install MTP support and run connection diagnostics.", "Scan", self._show_devices)
         self._summary_row(self._device_summary_items(devices))
-        self.inline_status = ctk.CTkLabel(self.content, text="Connection scan complete.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
+        active_profile = self._active_device_profile()
+        self.inline_status = ctk.CTkLabel(self.content, text=f'Connection scan complete. Active transfer profile: {active_profile.get("name", "Default")}', font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
 
         if not devices:
@@ -1769,7 +1902,8 @@ class AutoBookApp(ctk.CTk):
         if not path:
             self._set_status("File not found in library.")
             return
-        subdir = self.settings.get("device_subdir", "").strip()
+        profile = self._active_device_profile()
+        subdir = profile.get("subdir", "").strip() or self.settings.get("device_subdir", "").strip()
         try:
             result = copy_to_device(str(path), device, subdir=subdir)
             record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="success", message=result)
@@ -1810,6 +1944,14 @@ class AutoBookApp(ctk.CTk):
         self.settings_notifications_var = tk.BooleanVar(value=bool(self.settings.get("notifications_enabled", True)))
         self.settings_telemetry_var = tk.BooleanVar(value=bool(self.settings.get("telemetry_enabled", True)))
         self.settings_language_var = tk.StringVar(value=self.settings.get("interface_language", "English"))
+        self.settings_cache_var = tk.BooleanVar(value=bool(self.settings.get("search_cache_enabled", True)))
+        self.settings_queue_autostart_var = tk.BooleanVar(value=bool(self.settings.get("queue_autostart", True)))
+        self.settings_cache_age_var = tk.StringVar(value=str(self.settings.get("search_cache_max_age_hours", 72)))
+        active_formats = set(self.settings.get("allowed_formats", ["EPUB", "PDF"]))
+        self.allow_epub_var = tk.BooleanVar(value="EPUB" in active_formats)
+        self.allow_pdf_var = tk.BooleanVar(value="PDF" in active_formats)
+        profiles = get_device_profiles()
+        self.settings_profile_var = tk.StringVar(value=self.settings.get("active_device_profile", profiles[0]["name"]))
         allowed_sources = set(self.settings.get("allowed_sources", ["Project Gutenberg", "Open Library", "External"]))
         self.allow_gutenberg_var = tk.BooleanVar(value="Project Gutenberg" in allowed_sources)
         self.allow_openlibrary_var = tk.BooleanVar(value="Open Library" in allowed_sources)
@@ -1894,6 +2036,13 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
+        self._make_settings_field(form, 3, 1, "Cache max age (hours)", ctk.CTkEntry(
+            form,
+            textvariable=self.settings_cache_age_var,
+            fg_color=_CARD_BG,
+            border_color=_CARD_BORDER,
+            text_color=_TEXT,
+        ))
 
         toggles = ctk.CTkFrame(panel, fg_color="transparent")
         toggles.pack(fill="x", padx=18, pady=(0, 12))
@@ -1924,6 +2073,24 @@ class AutoBookApp(ctk.CTk):
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
         ).pack(anchor="w", pady=(10, 0))
+        ctk.CTkCheckBox(
+            toggles,
+            text="Enable offline search cache",
+            variable=self.settings_cache_var,
+            text_color=_TEXT,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            border_color=_CARD_BORDER,
+        ).pack(anchor="w", pady=(10, 0))
+        ctk.CTkCheckBox(
+            toggles,
+            text="Auto-start download queue",
+            variable=self.settings_queue_autostart_var,
+            text_color=_TEXT,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            border_color=_CARD_BORDER,
+        ).pack(anchor="w", pady=(10, 0))
 
         source_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         source_panel.pack(fill="x", padx=18, pady=(0, 12))
@@ -1945,6 +2112,57 @@ class AutoBookApp(ctk.CTk):
                 border_color=_CARD_BORDER,
             ).pack(side="left", padx=(0, 14))
 
+        format_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
+        format_panel.pack(fill="x", padx=18, pady=(0, 12))
+        ctk.CTkLabel(format_panel, text="Allowed formats", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        format_row = ctk.CTkFrame(format_panel, fg_color="transparent")
+        format_row.pack(fill="x", padx=14, pady=(0, 12))
+        for text, var in [("EPUB", self.allow_epub_var), ("PDF", self.allow_pdf_var)]:
+            ctk.CTkCheckBox(
+                format_row,
+                text=text,
+                variable=var,
+                text_color=_TEXT,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                border_color=_CARD_BORDER,
+            ).pack(side="left", padx=(0, 14))
+
+        profile_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
+        profile_panel.pack(fill="x", padx=18, pady=(0, 12))
+        top = ctk.CTkFrame(profile_panel, fg_color="transparent")
+        top.pack(fill="x", padx=14, pady=(12, 8))
+        ctk.CTkLabel(top, text="Device profiles", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(side="left")
+        ctk.CTkOptionMenu(
+            top,
+            values=[profile["name"] for profile in profiles],
+            variable=self.settings_profile_var,
+            width=180,
+            fg_color=_SURFACE_ALT,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ).pack(side="right")
+        active_profile = self._active_device_profile()
+        ctk.CTkLabel(profile_panel, text=f"Active profile subfolder: {active_profile.get('subdir', '-') or '-'}  |  Kind: {active_profile.get('kind', 'Generic')}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 10))
+        action_profile = ctk.CTkFrame(profile_panel, fg_color="transparent")
+        action_profile.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkButton(action_profile, text="Add Profile", width=112, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._add_device_profile).pack(side="left")
+        ctk.CTkButton(action_profile, text="Delete Profile", width=120, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._delete_device_profile_action).pack(side="left", padx=(10, 0))
+
+        diagnostics_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
+        diagnostics_panel.pack(fill="x", padx=18, pady=(0, 12))
+        ctk.CTkLabel(diagnostics_panel, text="Tooling and extensions", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        tooling = get_optional_tooling()
+        plugins = list_local_plugins()
+        ctk.CTkLabel(diagnostics_panel, text=f"Tesseract: {'Ready' if tooling['tesseract'] else 'Missing'}  |  Pandoc: {'Ready' if tooling['pandoc'] else 'Missing'}  |  ebook-convert: {'Ready' if tooling['ebook-convert'] else 'Missing'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
+        ctk.CTkLabel(diagnostics_panel, text=f"Local plugins: {len(plugins)}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 8))
+        for plugin in plugins[:4]:
+            ctk.CTkLabel(diagnostics_panel, text=f"{plugin['name']} {plugin['version']}  |  {plugin['description']}", font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", padx=14, pady=2)
+
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
         action_row.pack(fill="x", padx=18, pady=(0, 16))
         ctk.CTkButton(action_row, text="Save Settings", width=146, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
@@ -1957,6 +2175,7 @@ class AutoBookApp(ctk.CTk):
             ("Import Snapshot", self._import_snapshot),
             ("Run Organize", self._run_auto_organize),
             ("Health Scan", self._run_health_scan),
+            ("Companion Feed", self._generate_companion_feed),
         ]:
             ctk.CTkButton(
                 secondary_actions,
@@ -2002,6 +2221,11 @@ class AutoBookApp(ctk.CTk):
                 notifications_enabled=bool(self.settings_notifications_var.get()),
                 telemetry_enabled=bool(self.settings_telemetry_var.get()),
                 interface_language=self.settings_language_var.get(),
+                search_cache_enabled=bool(self.settings_cache_var.get()),
+                search_cache_max_age_hours=max(1, int(self.settings_cache_age_var.get() or "72")),
+                queue_autostart=bool(self.settings_queue_autostart_var.get()),
+                active_device_profile=self.settings_profile_var.get(),
+                allowed_formats=self._selected_allowed_formats(),
                 allowed_sources=self._selected_allowed_sources(),
             )
             self._refresh_settings_cache()
@@ -2024,6 +2248,14 @@ class AutoBookApp(ctk.CTk):
             allowed.append("External")
         return allowed or ["Project Gutenberg", "Open Library"]
 
+    def _selected_allowed_formats(self) -> list[str]:
+        allowed = []
+        if self.allow_epub_var.get():
+            allowed.append("EPUB")
+        if self.allow_pdf_var.get():
+            allowed.append("PDF")
+        return allowed or ["EPUB"]
+
     def _export_snapshot(self) -> None:
         try:
             path = export_library_snapshot()
@@ -2034,6 +2266,16 @@ class AutoBookApp(ctk.CTk):
         except Exception:
             log_exception("Snapshot export failed")
             self._set_status("Snapshot export failed. Check the log for details.")
+
+    def _generate_companion_feed(self) -> None:
+        try:
+            path = generate_companion_feed()
+            self._track("companion_feed_generated", filename=path.name)
+            self._set_status(f"Companion feed generated: {path.name}")
+            self._notify("AutoBook", f"Companion feed generated: {path.name}")
+        except Exception:
+            log_exception("Companion feed generation failed")
+            self._set_status("Companion feed generation failed. Check the log for details.")
 
     def _import_snapshot(self) -> None:
         dialog = ctk.CTkInputDialog(text="Enter the full path to an export JSON file.", title="Import Snapshot")
@@ -2075,6 +2317,34 @@ class AutoBookApp(ctk.CTk):
         except Exception:
             log_exception("Health scan failed")
             self._set_status("Health scan failed. Check the log for details.")
+
+    def _add_device_profile(self) -> None:
+        name = ctk.CTkInputDialog(text="Profile name", title="Add Device Profile").get_input()
+        if not name:
+            return
+        subdir = ctk.CTkInputDialog(text="Default subfolder", title="Add Device Profile").get_input() or ""
+        kind = ctk.CTkInputDialog(text="Device kind label", title="Add Device Profile").get_input() or "Generic"
+        try:
+            save_device_profile(name.strip(), subdir.strip(), kind.strip())
+            self._track("device_profile_saved", name=name.strip())
+            self._show_settings()
+            self._set_status(f'Profile "{name.strip()}" saved.')
+        except Exception:
+            log_exception("Device profile save failed")
+            self._set_status("Could not save the device profile.")
+
+    def _delete_device_profile_action(self) -> None:
+        name = self.settings_profile_var.get().strip()
+        if not name:
+            return
+        try:
+            delete_device_profile(name)
+            self._track("device_profile_deleted", name=name)
+            self._show_settings()
+            self._set_status(f'Profile "{name}" deleted.')
+        except Exception:
+            log_exception("Device profile delete failed")
+            self._set_status("Could not delete the device profile.")
 
     def _show_health_scan_report(self, results: list[dict[str, Any]]) -> None:
         dialog = ctk.CTkToplevel(self)

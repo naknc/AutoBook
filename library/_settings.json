@@ -12,5 +12,22 @@
     "Project Gutenberg",
     "Open Library",
     "External"
+  ],
+  "telemetry_enabled": true,
+  "interface_language": "English",
+  "allowed_formats": [
+    "EPUB",
+    "PDF"
+  ],
+  "search_cache_enabled": true,
+  "search_cache_max_age_hours": 72,
+  "queue_autostart": true,
+  "active_device_profile": "Default",
+  "device_profiles": [
+    {
+      "name": "Default",
+      "subdir": "",
+      "kind": "Generic"
+    }
   ]
 }
