@@ -68,6 +68,7 @@ from app.library import (
     update_download_job,
     update_settings,
     delete_device_profile,
+    import_plugin_manifest,
     toggle_plugin_enabled,
 )
 from app.ai_tools import ai_enrich_book, ai_generate_search_suggestions, ai_generate_tags, ai_is_configured
@@ -154,6 +155,38 @@ _I18N = {
         "Convert": "Convert",
         "AI Enrich": "AI Enrich",
         "Library Health Scan": "Library Health Scan",
+        "Search": "Search",
+        "Filters": "Filters",
+        "Advanced Filters": "Advanced Filters",
+        "AI Suggestions": "AI Suggestions",
+        "Favorites only": "Favorites only",
+        "Bulk mode": "Bulk mode",
+        "Favorite Selected": "Favorite Selected",
+        "Set Reading": "Set Reading",
+        "Add Collection": "Add Collection",
+        "Batch OCR": "Batch OCR",
+        "Batch Convert": "Batch Convert",
+        "Remove Selected": "Remove Selected",
+        "Download queue": "Download queue",
+        "Run Queue": "Run Queue",
+        "Clear Finished": "Clear Finished",
+        "Allowed sources": "Allowed sources",
+        "Allowed formats": "Allowed formats",
+        "Allowed actions": "Allowed actions",
+        "Device profiles": "Device profiles",
+        "Save Settings": "Save Settings",
+        "Open Log File": "Open Log File",
+        "Export Snapshot": "Export Snapshot",
+        "Import Snapshot": "Import Snapshot",
+        "Run Organize": "Run Organize",
+        "Health Scan": "Health Scan",
+        "Companion Feed": "Companion Feed",
+        "Clear Cache": "Clear Cache",
+        "Web Preview": "Web Preview",
+        "Import Plugin": "Import Plugin",
+        "Add Profile": "Add Profile",
+        "Delete Profile": "Delete Profile",
+        "Refresh": "Refresh",
     },
     "Turkish": {
         "Catalog Search": "Katalog Arama",
@@ -176,6 +209,38 @@ _I18N = {
         "Convert": "Dönüştür",
         "AI Enrich": "AI Zenginleştir",
         "Library Health Scan": "Kütüphane Sağlık Taraması",
+        "Search": "Ara",
+        "Filters": "Filtreler",
+        "Advanced Filters": "Gelişmiş Filtreler",
+        "AI Suggestions": "AI Önerileri",
+        "Favorites only": "Sadece favoriler",
+        "Bulk mode": "Toplu işlem modu",
+        "Favorite Selected": "Seçileni Favorile",
+        "Set Reading": "Okuma Durumu Ver",
+        "Add Collection": "Koleksiyon Ekle",
+        "Batch OCR": "Toplu OCR",
+        "Batch Convert": "Toplu Dönüştür",
+        "Remove Selected": "Seçileni Kaldır",
+        "Download queue": "İndirme kuyruğu",
+        "Run Queue": "Kuyruğu Çalıştır",
+        "Clear Finished": "Bitenleri Temizle",
+        "Allowed sources": "İzin verilen kaynaklar",
+        "Allowed formats": "İzin verilen formatlar",
+        "Allowed actions": "İzin verilen aksiyonlar",
+        "Device profiles": "Cihaz profilleri",
+        "Save Settings": "Ayarları Kaydet",
+        "Open Log File": "Log Dosyasını Aç",
+        "Export Snapshot": "Anlık Görüntü Dışa Aktar",
+        "Import Snapshot": "Anlık Görüntü İçe Aktar",
+        "Run Organize": "Düzenlemeyi Çalıştır",
+        "Health Scan": "Sağlık Taraması",
+        "Companion Feed": "Companion Feed",
+        "Clear Cache": "Önbelleği Temizle",
+        "Web Preview": "Web Önizleme",
+        "Import Plugin": "Plugin İçe Aktar",
+        "Add Profile": "Profil Ekle",
+        "Delete Profile": "Profili Sil",
+        "Refresh": "Yenile",
     },
 }
 
@@ -321,6 +386,7 @@ class AutoBookApp(ctk.CTk):
         self.selected_book_ids: set[str] = set()
         self.queue_processing = False
         self._build_shell()
+        self.after(150, self._show_onboarding_if_needed)
         self._show_search()
 
     def _t(self, text: str) -> str:
@@ -398,6 +464,34 @@ class AutoBookApp(ctk.CTk):
         self.nav_buttons = {}
         self._build_shell()
         self._show_settings()
+
+    def _show_onboarding_if_needed(self) -> None:
+        if self.settings.get("onboarding_completed", False):
+            return
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Welcome to AutoBook")
+        dialog.geometry("560x360")
+        dialog.configure(fg_color=_SURFACE)
+        dialog.transient(self)
+        dialog.grab_set()
+        ctk.CTkLabel(dialog, text="Welcome to AutoBook", font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=24, pady=(24, 8))
+        for line in [
+            "1. Search the catalog and download a book.",
+            "2. Organize titles with collections and favorites.",
+            "3. Use OCR, conversion, device transfer and analytics as needed.",
+        ]:
+            ctk.CTkLabel(dialog, text=line, font=ctk.CTkFont(size=14), text_color=_TEXT_MUTED, justify="left").pack(anchor="w", padx=24, pady=4)
+        ctk.CTkButton(
+            dialog,
+            text="Start Using AutoBook",
+            width=180,
+            height=40,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            corner_radius=14,
+            text_color=_TEXT,
+            command=lambda: (update_settings(onboarding_completed=True), self._refresh_settings_cache(), dialog.destroy()),
+        ).pack(anchor="w", padx=24, pady=(18, 0))
 
     def _add_nav_button(self, parent: ctk.CTkFrame, key: str, label: str, command: Callable[[], None]) -> None:
         button = ctk.CTkButton(
@@ -847,7 +941,7 @@ class AutoBookApp(ctk.CTk):
         self.search_entry.bind("<Return>", lambda _event: self._do_search())
         ctk.CTkButton(
             search_row,
-            text="Search",
+            text=self._t("Search"),
             width=128,
             height=46,
             corner_radius=14,
@@ -863,7 +957,7 @@ class AutoBookApp(ctk.CTk):
         self.search_filters_visible = tk.BooleanVar(value=False)
         ctk.CTkButton(
             toolbar_row,
-            text="Advanced Filters",
+            text=self._t("Advanced Filters"),
             width=140,
             height=32,
             corner_radius=12,
@@ -876,7 +970,7 @@ class AutoBookApp(ctk.CTk):
         ).pack(side="left")
         ctk.CTkButton(
             toolbar_row,
-            text="AI Suggestions",
+            text=self._t("AI Suggestions"),
             width=126,
             height=32,
             corner_radius=12,
@@ -1255,7 +1349,7 @@ class AutoBookApp(ctk.CTk):
         search_entry.bind("<KeyRelease>", lambda _event: self._refresh_library_results())
         ctk.CTkButton(
             row,
-            text="Filters",
+            text=self._t("Filters"),
             width=94,
             height=34,
             fg_color=_SURFACE_ALT,
@@ -1293,7 +1387,7 @@ class AutoBookApp(ctk.CTk):
         self._make_library_filter(filter_frame, 3, "Status", self.library_status_var, ["All Statuses", "Unread", "Reading", "Completed"])
         ctk.CTkCheckBox(
             filter_frame,
-            text="Favorites only",
+            text=self._t("Favorites only"),
             variable=self.library_favorites_var,
             command=self._refresh_library_results,
             text_color=_TEXT,
@@ -1303,7 +1397,7 @@ class AutoBookApp(ctk.CTk):
         ).grid(row=1, column=2, sticky="w", padx=(8, 0), pady=(28, 0))
         ctk.CTkCheckBox(
             filter_frame,
-            text="Bulk mode",
+            text=self._t("Bulk mode"),
             variable=self.library_bulk_mode_var,
             command=self._refresh_library_results,
             text_color=_TEXT,
@@ -1318,12 +1412,12 @@ class AutoBookApp(ctk.CTk):
         self.library_bulk_row = bulk_row
         self.bulk_status_label = ctk.CTkLabel(bulk_row, text="0 selected", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT)
         self.bulk_status_label.pack(side="left", padx=(0, 14))
-        ctk.CTkButton(bulk_row, text="Favorite Selected", width=138, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_mark_favorite).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bulk_row, text="Set Reading", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_set_reading).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bulk_row, text="Add Collection", width=122, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_add_collection).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bulk_row, text="Batch OCR", width=106, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_run_ocr).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bulk_row, text="Batch Convert", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_convert_books).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(bulk_row, text="Remove Selected", width=132, height=34, fg_color=_DANGER, hover_color=_DANGER_HOVER, text_color=_TEXT, command=self._bulk_remove_books).pack(side="left")
+        ctk.CTkButton(bulk_row, text=self._t("Favorite Selected"), width=138, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_mark_favorite).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text=self._t("Set Reading"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_set_reading).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text=self._t("Add Collection"), width=122, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_add_collection).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text=self._t("Batch OCR"), width=106, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_run_ocr).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text=self._t("Batch Convert"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_convert_books).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(bulk_row, text=self._t("Remove Selected"), width=132, height=34, fg_color=_DANGER, hover_color=_DANGER_HOVER, text_color=_TEXT, command=self._bulk_remove_books).pack(side="left")
         self.library_bulk_row.pack_forget()
 
         recommendations = get_recommendations(limit=4)
@@ -1915,9 +2009,9 @@ class AutoBookApp(ctk.CTk):
         queue_panel = self._make_surface(self.content, (0, 8))
         queue_row = ctk.CTkFrame(queue_panel, fg_color="transparent")
         queue_row.pack(fill="x", padx=18, pady=(14, 12))
-        ctk.CTkLabel(queue_row, text="Download queue", font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT).pack(side="left")
-        ctk.CTkButton(queue_row, text="Run Queue", width=110, height=32, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=12, text_color=_TEXT, command=self._start_queue_processing).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(queue_row, text="Clear Finished", width=120, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=12, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._clear_queue_finished).pack(side="right")
+        ctk.CTkLabel(queue_row, text=self._t("Download queue"), font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT).pack(side="left")
+        ctk.CTkButton(queue_row, text=self._t("Run Queue"), width=110, height=32, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=12, text_color=_TEXT, command=self._start_queue_processing).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(queue_row, text=self._t("Clear Finished"), width=120, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=12, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._clear_queue_finished).pack(side="right")
         if queue_items:
             for item in queue_items[:6]:
                 row = ctk.CTkFrame(queue_panel, fg_color="transparent")
@@ -2383,7 +2477,7 @@ class AutoBookApp(ctk.CTk):
 
         source_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         source_panel.pack(fill="x", padx=18, pady=(0, 12))
-        ctk.CTkLabel(source_panel, text="Allowed sources", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        ctk.CTkLabel(source_panel, text=self._t("Allowed sources"), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
         source_row = ctk.CTkFrame(source_panel, fg_color="transparent")
         source_row.pack(fill="x", padx=14, pady=(0, 12))
         for text, var in [
@@ -2403,7 +2497,7 @@ class AutoBookApp(ctk.CTk):
 
         format_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         format_panel.pack(fill="x", padx=18, pady=(0, 12))
-        ctk.CTkLabel(format_panel, text="Allowed formats", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        ctk.CTkLabel(format_panel, text=self._t("Allowed formats"), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
         format_row = ctk.CTkFrame(format_panel, fg_color="transparent")
         format_row.pack(fill="x", padx=14, pady=(0, 12))
         for text, var in [("EPUB", self.allow_epub_var), ("PDF", self.allow_pdf_var)]:
@@ -2419,7 +2513,7 @@ class AutoBookApp(ctk.CTk):
 
         policy_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         policy_panel.pack(fill="x", padx=18, pady=(0, 12))
-        ctk.CTkLabel(policy_panel, text="Allowed actions", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        ctk.CTkLabel(policy_panel, text=self._t("Allowed actions"), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
         policy_row = ctk.CTkFrame(policy_panel, fg_color="transparent")
         policy_row.pack(fill="x", padx=14, pady=(0, 12))
         for text, var in [
@@ -2443,7 +2537,7 @@ class AutoBookApp(ctk.CTk):
         profile_panel.pack(fill="x", padx=18, pady=(0, 12))
         top = ctk.CTkFrame(profile_panel, fg_color="transparent")
         top.pack(fill="x", padx=14, pady=(12, 8))
-        ctk.CTkLabel(top, text="Device profiles", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(side="left")
+        ctk.CTkLabel(top, text=self._t("Device profiles"), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(side="left")
         ctk.CTkOptionMenu(
             top,
             values=[profile["name"] for profile in profiles],
@@ -2461,8 +2555,8 @@ class AutoBookApp(ctk.CTk):
         ctk.CTkLabel(profile_panel, text=f"Active profile subfolder: {active_profile.get('subdir', '-') or '-'}  |  Kind: {active_profile.get('kind', 'Generic')}  |  Format: {active_profile.get('preferred_format', 'Any')}  |  Auto-send: {'On' if active_profile.get('auto_send') else 'Off'}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=14, pady=(0, 10))
         action_profile = ctk.CTkFrame(profile_panel, fg_color="transparent")
         action_profile.pack(fill="x", padx=14, pady=(0, 12))
-        ctk.CTkButton(action_profile, text="Add Profile", width=112, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._add_device_profile).pack(side="left")
-        ctk.CTkButton(action_profile, text="Delete Profile", width=120, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._delete_device_profile_action).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(action_profile, text=self._t("Add Profile"), width=112, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._add_device_profile).pack(side="left")
+        ctk.CTkButton(action_profile, text=self._t("Delete Profile"), width=120, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._delete_device_profile_action).pack(side="left", padx=(10, 0))
 
         diagnostics_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         diagnostics_panel.pack(fill="x", padx=18, pady=(0, 12))
@@ -2482,22 +2576,23 @@ class AutoBookApp(ctk.CTk):
             ctk.CTkButton(row, text="Toggle", width=72, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=10, text_color=_TEXT, command=lambda plugin_path=plugin["path"]: self._toggle_plugin(plugin_path)).pack(side="right")
         diag_actions = ctk.CTkFrame(diagnostics_panel, fg_color="transparent")
         diag_actions.pack(fill="x", padx=14, pady=(8, 12))
-        ctk.CTkButton(diag_actions, text="Clear Cache", width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
-        ctk.CTkButton(diag_actions, text="Web Preview", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._generate_web_preview).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(diag_actions, text=self._t("Clear Cache"), width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
+        ctk.CTkButton(diag_actions, text=self._t("Web Preview"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._generate_web_preview).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(diag_actions, text=self._t("Import Plugin"), width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._import_plugin).pack(side="left", padx=(10, 0))
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
         action_row.pack(fill="x", padx=18, pady=(0, 16))
-        ctk.CTkButton(action_row, text="Save Settings", width=146, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(action_row, text=self._t("Save Settings"), width=146, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
 
         secondary_actions = ctk.CTkFrame(action_row, fg_color="transparent")
         secondary_actions.pack(side="right")
         for text, cmd in [
-            ("Open Log File", self._open_log_file),
-            ("Export Snapshot", self._export_snapshot),
-            ("Import Snapshot", self._import_snapshot),
-            ("Run Organize", self._run_auto_organize),
-            ("Health Scan", self._run_health_scan),
-            ("Companion Feed", self._generate_companion_feed),
+            (self._t("Open Log File"), self._open_log_file),
+            (self._t("Export Snapshot"), self._export_snapshot),
+            (self._t("Import Snapshot"), self._import_snapshot),
+            (self._t("Run Organize"), self._run_auto_organize),
+            (self._t("Health Scan"), self._run_health_scan),
+            (self._t("Companion Feed"), self._generate_companion_feed),
         ]:
             ctk.CTkButton(
                 secondary_actions,
@@ -2643,6 +2738,20 @@ class AutoBookApp(ctk.CTk):
         except Exception:
             log_exception("Plugin toggle failed")
             self._set_status("Plugin toggle failed.")
+
+    def _import_plugin(self) -> None:
+        dialog = ctk.CTkInputDialog(text="Enter the full path to a plugin manifest JSON file.", title="Import Plugin")
+        path = dialog.get_input()
+        if not path:
+            return
+        try:
+            plugin = import_plugin_manifest(path.strip())
+            self._track("plugin_imported", plugin=plugin.get("name", "unknown"))
+            self._set_status(f'Plugin imported: {plugin.get("name", "unknown")}')
+            self._show_settings()
+        except Exception as exc:
+            log_exception("Plugin import failed")
+            self._set_status(f"Plugin import failed: {exc}")
 
     def _import_snapshot(self) -> None:
         dialog = ctk.CTkInputDialog(text="Enter the full path to an export JSON file.", title="Import Snapshot")

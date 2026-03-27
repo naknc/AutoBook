@@ -39,5 +39,6 @@
     "ocr",
     "convert",
     "ai"
-  ]
+  ],
+  "onboarding_completed": false
 }

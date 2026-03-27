@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from app.library import LIBRARY_DIR, get_book, get_book_path, update_book
+from app.library import LIBRARY_DIR, generate_companion_feed, get_all_books, get_book, get_book_path, update_book
 from app.logging_utils import log_exception
 
 
@@ -156,6 +156,8 @@ def repair_book_file(book_id: str) -> dict[str, Any]:
 
 def export_library_web_preview() -> Path:
     companion_dir = LIBRARY_DIR / "companion"
+    feed_path = generate_companion_feed()
+    books = get_all_books()
     payload = {
         "generated_at": str(Path.cwd()),
         "index": "Use companion/library_feed.json as a simple browser-facing payload.",
@@ -163,23 +165,33 @@ def export_library_web_preview() -> Path:
     json_path = companion_dir / "web_preview.json"
     json_path.write_text(json.dumps(payload, indent=2))
     html_path = companion_dir / "index.html"
+    cards = "\n".join(
+        f"<article class=\"book\"><h2>{book.get('title', 'Unknown')}</h2><p class=\"meta\">{book.get('author', '')}</p><p>{book.get('summary', '')}</p></article>"
+        for book in books[:12]
+    ) or "<p>No books in the local library yet.</p>"
     html_path.write_text(
-        """<!doctype html>
+        f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AutoBook Companion</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0b1220; color:#e5eef9; margin:0; padding:32px; }
-    .card { background:#162033; border:1px solid #273449; border-radius:18px; padding:20px; max-width:960px; margin:0 auto; }
-    a { color:#7db0ff; }
+    body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0b1220; color:#e5eef9; margin:0; padding:32px; }}
+    .card {{ background:#162033; border:1px solid #273449; border-radius:18px; padding:20px; max-width:960px; margin:0 auto; }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-top:20px; }}
+    .book {{ background:#111827; border:1px solid #273449; border-radius:14px; padding:16px; }}
+    .meta {{ color:#93a4bc; font-size:14px; }}
+    a {{ color:#7db0ff; }}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>AutoBook Companion</h1>
-    <p>Open <code>library_feed.json</code> from the same folder to inspect the exported catalog payload.</p>
+    <p class="meta">Feed file: <code>{feed_path.name}</code></p>
+    <div class="grid">
+      {cards}
+    </div>
   </div>
 </body>
 </html>

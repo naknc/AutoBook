@@ -7,13 +7,20 @@
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0b1220; color:#e5eef9; margin:0; padding:32px; }
     .card { background:#162033; border:1px solid #273449; border-radius:18px; padding:20px; max-width:960px; margin:0 auto; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-top:20px; }
+    .book { background:#111827; border:1px solid #273449; border-radius:14px; padding:16px; }
+    .meta { color:#93a4bc; font-size:14px; }
     a { color:#7db0ff; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>AutoBook Companion</h1>
-    <p>Open <code>library_feed.json</code> from the same folder to inspect the exported catalog payload.</p>
+    <p class="meta">Feed file: <code>library_feed.json</code></p>
+    <div class="grid">
+      <article class="book"><h2>Animal Farm</h2><p class="meta">George Orwell</p><p>Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...</p></article>
+<article class="book"><h2>The Little Prince Read-Aloud Storybook</h2><p class="meta">Antoine De Saint-Exupéry</p><p>External source file size: 4 MB</p></article>
+    </div>
   </div>
 </body>
 </html>

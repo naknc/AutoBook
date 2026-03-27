@@ -624,6 +624,24 @@ def toggle_plugin_enabled(path_str: str) -> dict[str, str] | None:
     }
 
 
+def import_plugin_manifest(path_str: str) -> dict[str, str]:
+    source = Path(path_str).expanduser()
+    payload = _read_json(source, {})
+    if not isinstance(payload, dict):
+        raise ValueError("Plugin manifest is not valid JSON.")
+    name = str(payload.get("name", source.stem)).strip() or source.stem
+    target = PLUGINS_DIR / f"{name.lower().replace(' ', '_')}.json"
+    payload.setdefault("enabled", True)
+    _write_json(target, payload)
+    return {
+        "name": str(payload.get("name", name)),
+        "version": str(payload.get("version", "0.1.0")),
+        "description": str(payload.get("description", "")),
+        "path": str(target.relative_to(BASE_DIR)),
+        "enabled": "true" if bool(payload.get("enabled", True)) else "false",
+    }
+
+
 def generate_companion_feed() -> Path:
     books = _load_metadata()
     payload = {
