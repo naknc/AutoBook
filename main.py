@@ -1724,7 +1724,10 @@ class AutoBookApp(ctk.CTk):
 
         form = ctk.CTkFrame(panel, fg_color="transparent")
         form.pack(fill="x", padx=18, pady=16)
-        self._make_settings_field(form, "Preferred download format", ctk.CTkOptionMenu(
+        form.grid_columnconfigure(0, weight=1)
+        form.grid_columnconfigure(1, weight=1)
+
+        self._make_settings_field(form, 0, 0, "Preferred download format", ctk.CTkOptionMenu(
             form,
             values=["Any", "EPUB", "PDF"],
             variable=self.settings_format_var,
@@ -1736,7 +1739,7 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
-        self._make_settings_field(form, "Preferred source", ctk.CTkOptionMenu(
+        self._make_settings_field(form, 0, 1, "Preferred source", ctk.CTkOptionMenu(
             form,
             values=["All Sources", "Project Gutenberg", "Open Library", "External"],
             variable=self.settings_source_var,
@@ -1748,21 +1751,21 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
-        self._make_settings_field(form, "Default collection after download", ctk.CTkEntry(
+        self._make_settings_field(form, 1, 0, "Default collection after download", ctk.CTkEntry(
             form,
             textvariable=self.settings_collection_var,
             fg_color=_CARD_BG,
             border_color=_CARD_BORDER,
             text_color=_TEXT,
         ))
-        self._make_settings_field(form, "Device subfolder", ctk.CTkEntry(
+        self._make_settings_field(form, 1, 1, "Device subfolder", ctk.CTkEntry(
             form,
             textvariable=self.settings_device_subdir_var,
             fg_color=_CARD_BG,
             border_color=_CARD_BORDER,
             text_color=_TEXT,
         ))
-        self._make_settings_field(form, "Auto organize books by", ctk.CTkOptionMenu(
+        self._make_settings_field(form, 2, 0, "Auto organize books by", ctk.CTkOptionMenu(
             form,
             values=["None", "Author", "Format", "Source"],
             variable=self.settings_organize_var,
@@ -1774,7 +1777,7 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
-        self._make_settings_field(form, "Theme preset", ctk.CTkOptionMenu(
+        self._make_settings_field(form, 2, 1, "Theme preset", ctk.CTkOptionMenu(
             form,
             values=list(_THEME_PRESETS.keys()),
             variable=self.settings_theme_var,
@@ -1787,24 +1790,26 @@ class AutoBookApp(ctk.CTk):
             dropdown_text_color=_TEXT,
         ))
 
+        toggles = ctk.CTkFrame(panel, fg_color="transparent")
+        toggles.pack(fill="x", padx=18, pady=(0, 12))
         ctk.CTkCheckBox(
-            panel,
+            toggles,
             text="Open Library after a successful download",
             variable=self.settings_open_library_var,
             text_color=_TEXT,
             fg_color=_ACCENT,
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
-        ).pack(anchor="w", padx=18, pady=(0, 12))
+        ).pack(anchor="w", pady=(0, 10))
         ctk.CTkCheckBox(
-            panel,
+            toggles,
             text="Enable notifications",
             variable=self.settings_notifications_var,
             text_color=_TEXT,
             fg_color=_ACCENT,
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
-        ).pack(anchor="w", padx=18, pady=(0, 12))
+        ).pack(anchor="w")
 
         source_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         source_panel.pack(fill="x", padx=18, pady=(0, 12))
@@ -1828,21 +1833,39 @@ class AutoBookApp(ctk.CTk):
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
         action_row.pack(fill="x", padx=18, pady=(0, 16))
-        ctk.CTkButton(action_row, text="Save Settings", width=150, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
-        ctk.CTkButton(action_row, text="Open Log File", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._open_log_file).pack(side="left")
-        ctk.CTkButton(action_row, text="Export Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._export_snapshot).pack(side="left", padx=(10, 0))
-        ctk.CTkButton(action_row, text="Import Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._import_snapshot).pack(side="left", padx=(10, 0))
-        ctk.CTkButton(action_row, text="Run Organize", width=130, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._run_auto_organize).pack(side="left", padx=(10, 0))
-        ctk.CTkButton(action_row, text="Health Scan", width=124, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._run_health_scan).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(action_row, text="Save Settings", width=146, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
+
+        secondary_actions = ctk.CTkFrame(action_row, fg_color="transparent")
+        secondary_actions.pack(side="right")
+        for text, cmd in [
+            ("Open Log File", self._open_log_file),
+            ("Export Snapshot", self._export_snapshot),
+            ("Import Snapshot", self._import_snapshot),
+            ("Run Organize", self._run_auto_organize),
+            ("Health Scan", self._run_health_scan),
+        ]:
+            ctk.CTkButton(
+                secondary_actions,
+                text=text,
+                width=132,
+                height=38,
+                fg_color=_SURFACE_ALT,
+                hover_color=_CARD_BG,
+                border_width=1,
+                border_color=_CARD_BORDER,
+                corner_radius=14,
+                text_color=_TEXT,
+                command=cmd,
+            ).pack(side="left", padx=(10, 0))
 
         self.inline_status = ctk.CTkLabel(self.content, text=f"Log file: {LOG_FILE}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
-    def _make_settings_field(self, parent: ctk.CTkFrame, label: str, widget: Any) -> None:
-        row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", pady=8)
-        ctk.CTkLabel(row, text=label, font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT, width=220, anchor="w").pack(side="left")
-        widget.pack(side="left", fill="x", expand=True)
+    def _make_settings_field(self, parent: ctk.CTkFrame, row: int, column: int, label: str, widget: Any) -> None:
+        field = ctk.CTkFrame(parent, fg_color="transparent")
+        field.grid(row=row, column=column, sticky="ew", padx=8, pady=8)
+        ctk.CTkLabel(field, text=label, font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", pady=(0, 6))
+        widget.pack(fill="x")
 
     def _save_settings(self) -> None:
         try:

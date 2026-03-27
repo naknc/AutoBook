@@ -266,3 +266,4 @@ Traceback (most recent call last):
   File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/adapters.py", line 677, in send
     raise ConnectionError(e, request=request)
 requests.exceptions.ConnectionError: HTTPSConnectionPool(host='openlibrary.org', port=443): Max retries exceeded with url: /search.json?q=animal+farm&language=eng&limit=24&sort=rating&fields=key%2Ctitle%2Cauthor_name%2Cfirst_publish_year%2Ccover_i%2Cia%2Cratings_average%2Cratings_count%2Csubject%2Cfirst_sentence (Caused by NameResolutionError("HTTPSConnection(host='openlibrary.org', port=443): Failed to resolve 'openlibrary.org' ([Errno 8] nodename nor servname provided, or not known)"))
+2026-03-27 22:39:19,806 | INFO | MainThread | Logging initialized
