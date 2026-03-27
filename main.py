@@ -187,6 +187,16 @@ _I18N = {
         "Add Profile": "Add Profile",
         "Delete Profile": "Delete Profile",
         "Refresh": "Refresh",
+        "Welcome to AutoBook": "Welcome to AutoBook",
+        "Start Using AutoBook": "Start Using AutoBook",
+        "Ready for search.": "Ready for search.",
+        "Discovery workspace": "Discovery workspace",
+        "No direct file available": "No direct file available",
+        "Recommended from your library": "Recommended from your library",
+        "No queued downloads.": "No queued downloads.",
+        "Save": "Save",
+        "Cancel": "Cancel",
+        "Toggle": "Toggle",
     },
     "Turkish": {
         "Catalog Search": "Katalog Arama",
@@ -241,6 +251,16 @@ _I18N = {
         "Add Profile": "Profil Ekle",
         "Delete Profile": "Profili Sil",
         "Refresh": "Yenile",
+        "Welcome to AutoBook": "AutoBook'a Hos Geldin",
+        "Start Using AutoBook": "AutoBook'u Kullanmaya Basla",
+        "Ready for search.": "Arama icin hazir.",
+        "Discovery workspace": "Kesif alani",
+        "No direct file available": "Dogrudan dosya baglantisi yok",
+        "Recommended from your library": "Kutuphane onerileri",
+        "No queued downloads.": "Kuyrukta indirme yok.",
+        "Save": "Kaydet",
+        "Cancel": "Iptal",
+        "Toggle": "Degistir",
     },
 }
 
@@ -474,7 +494,7 @@ class AutoBookApp(ctk.CTk):
         dialog.configure(fg_color=_SURFACE)
         dialog.transient(self)
         dialog.grab_set()
-        ctk.CTkLabel(dialog, text="Welcome to AutoBook", font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=24, pady=(24, 8))
+        ctk.CTkLabel(dialog, text=self._t("Welcome to AutoBook"), font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=24, pady=(24, 8))
         for line in [
             "1. Search the catalog and download a book.",
             "2. Organize titles with collections and favorites.",
@@ -483,7 +503,7 @@ class AutoBookApp(ctk.CTk):
             ctk.CTkLabel(dialog, text=line, font=ctk.CTkFont(size=14), text_color=_TEXT_MUTED, justify="left").pack(anchor="w", padx=24, pady=4)
         ctk.CTkButton(
             dialog,
-            text="Start Using AutoBook",
+            text=self._t("Start Using AutoBook"),
             width=180,
             height=40,
             fg_color=_ACCENT,
@@ -1009,7 +1029,7 @@ class AutoBookApp(ctk.CTk):
         self.search_filter_row.pack_forget()
         self._update_search_context_label()
 
-        self.inline_status = ctk.CTkLabel(self.content, text="Ready for search.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
+        self.inline_status = ctk.CTkLabel(self.content, text=self._t("Ready for search."), font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
         self.results_frame = ScrollableFrame(self.content, fg_color=_APP_BG)
@@ -1063,7 +1083,7 @@ class AutoBookApp(ctk.CTk):
     def _render_search_placeholder(self) -> None:
         card = ctk.CTkFrame(self.results_frame.inner, fg_color=_SURFACE, corner_radius=22, border_width=1, border_color=_CARD_BORDER)
         card.pack(fill="x", padx=2, pady=2)
-        ctk.CTkLabel(card, text="Discovery workspace", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=24, pady=(22, 8))
+        ctk.CTkLabel(card, text=self._t("Discovery workspace"), font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=24, pady=(22, 8))
         ctk.CTkLabel(
             card,
             text="Start a search to compare sources, inspect ratings, review richer metadata and download files into the local catalog.",
@@ -1276,7 +1296,7 @@ class AutoBookApp(ctk.CTk):
             if link.mirror:
                 ctk.CTkLabel(actions, text=link.mirror, font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT).pack(pady=(0, 4))
         if not book.downloads:
-            ctk.CTkLabel(actions, text="No direct file available", text_color=_TEXT_SOFT).pack()
+            ctk.CTkLabel(actions, text=self._t("No direct file available"), text_color=_TEXT_SOFT).pack()
 
     def _download_book(self, selected_link: Any, book: BookResult) -> None:
         self._refresh_settings_cache()
@@ -1425,7 +1445,7 @@ class AutoBookApp(ctk.CTk):
             rec_panel = ctk.CTkFrame(controls, fg_color=_CARD_BG, corner_radius=16, border_width=1, border_color=_CARD_BORDER)
             rec_panel.pack(fill="x", padx=18, pady=(0, 10))
             self.library_recommendations_panel = rec_panel
-            ctk.CTkLabel(rec_panel, text="Recommended from your library", font=ctk.CTkFont(size=14, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=16, pady=(12, 4))
+            ctk.CTkLabel(rec_panel, text=self._t("Recommended from your library"), font=ctk.CTkFont(size=14, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=16, pady=(12, 4))
             rec_row = ctk.CTkFrame(rec_panel, fg_color="transparent")
             rec_row.pack(fill="x", padx=16, pady=(0, 14))
             for book in recommendations:
@@ -1556,7 +1576,7 @@ class AutoBookApp(ctk.CTk):
                     self._make_badge(badges, text, color)
             for category in book.get("auto_categories", [])[:2]:
                 self._make_badge(badges, category, _CARD_BG)
-            ctk.CTkButton(card, text="Edit", width=90, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=lambda b=book: self._edit_book_details(b["id"])).pack(anchor="w", padx=16, pady=(0, 16))
+            ctk.CTkButton(card, text=self._t("Edit"), width=90, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=lambda b=book: self._edit_book_details(b["id"])).pack(anchor="w", padx=16, pady=(0, 16))
 
     def _make_library_card(self, book: dict[str, Any]) -> None:
         card = ctk.CTkFrame(self.library_results.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
@@ -1735,8 +1755,8 @@ class AutoBookApp(ctk.CTk):
                 log_exception("Book metadata update failed")
                 self._set_status("Book metadata update failed. Check the log for details.")
 
-        ctk.CTkButton(actions, text="Cancel", width=100, height=36, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=dialog.destroy).pack(side="right")
-        ctk.CTkButton(actions, text="Save", width=100, height=36, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, text_color=_TEXT, command=_save).pack(side="right", padx=(0, 10))
+        ctk.CTkButton(actions, text=self._t("Cancel"), width=100, height=36, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=dialog.destroy).pack(side="right")
+        ctk.CTkButton(actions, text=self._t("Save"), width=100, height=36, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, text_color=_TEXT, command=_save).pack(side="right", padx=(0, 10))
 
     def _bulk_mark_favorite(self) -> None:
         if not self.selected_book_ids:
@@ -1903,7 +1923,7 @@ class AutoBookApp(ctk.CTk):
                 log_exception("Library delete failed")
                 self._set_status("Book removal failed. Check the log for details.")
 
-        ctk.CTkButton(actions, text="Cancel", fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, width=100, text_color=_TEXT, command=dialog.destroy).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(actions, text=self._t("Cancel"), fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, width=100, text_color=_TEXT, command=dialog.destroy).pack(side="left", padx=(0, 8))
         ctk.CTkButton(actions, text="Remove", fg_color=_DANGER, hover_color=_DANGER_HOVER, corner_radius=12, width=100, text_color=_TEXT, command=_confirm).pack(side="left")
 
     def _repair_book(self, book_id: str) -> None:
@@ -2028,10 +2048,10 @@ class AutoBookApp(ctk.CTk):
                 ctk.CTkButton(controls, text="Up", width=42, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_reorder(job_id, "up")).pack(side="left", padx=(6, 0))
                 ctk.CTkButton(controls, text="Down", width=54, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_reorder(job_id, "down")).pack(side="left", padx=(6, 0))
                 ctk.CTkButton(controls, text="Retry", width=54, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_retry(job_id)).pack(side="left", padx=(6, 0))
-                ctk.CTkButton(controls, text="Cancel", width=62, height=28, fg_color=_DANGER if item.get("status") == "queued" else _SURFACE_ALT, hover_color=_DANGER_HOVER if item.get("status") == "queued" else _CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_cancel(job_id)).pack(side="left", padx=(6, 0))
+                ctk.CTkButton(controls, text=self._t("Cancel"), width=62, height=28, fg_color=_DANGER if item.get("status") == "queued" else _SURFACE_ALT, hover_color=_DANGER_HOVER if item.get("status") == "queued" else _CARD_BG, corner_radius=10, text_color=_TEXT, command=lambda job_id=item.get("id", ""): self._queue_cancel(job_id)).pack(side="left", padx=(6, 0))
                 self._make_badge(row, item.get("status", "queued").upper(), _SURFACE_ALT if item.get("status") == "queued" else (_SUCCESS if item.get("status") == "success" else _DANGER))
         else:
-            ctk.CTkLabel(queue_panel, text="No queued downloads.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=18, pady=(0, 14))
+            ctk.CTkLabel(queue_panel, text=self._t("No queued downloads."), font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(anchor="w", padx=18, pady=(0, 14))
 
         if not history:
             self._show_empty_state("No download history yet", "Every download success or failure will appear here so you can quickly inspect what happened.")
@@ -2573,7 +2593,7 @@ class AutoBookApp(ctk.CTk):
             row.pack(fill="x", padx=14, pady=2)
             status_text = "enabled" if plugin.get("enabled") == "true" else "disabled"
             ctk.CTkLabel(row, text=f"{plugin['name']} {plugin['version']}  |  {status_text}  |  {plugin['description']}", font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(side="left")
-            ctk.CTkButton(row, text="Toggle", width=72, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=10, text_color=_TEXT, command=lambda plugin_path=plugin["path"]: self._toggle_plugin(plugin_path)).pack(side="right")
+            ctk.CTkButton(row, text=self._t("Toggle"), width=72, height=28, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=10, text_color=_TEXT, command=lambda plugin_path=plugin["path"]: self._toggle_plugin(plugin_path)).pack(side="right")
         diag_actions = ctk.CTkFrame(diagnostics_panel, fg_color="transparent")
         diag_actions.pack(fill="x", padx=14, pady=(8, 12))
         ctk.CTkButton(diag_actions, text=self._t("Clear Cache"), width=110, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=12, text_color=_TEXT, command=self._clear_offline_cache).pack(side="left")
