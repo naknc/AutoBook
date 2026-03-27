@@ -12,12 +12,17 @@
     "rating": 4.2,
     "ratings_count": 559,
     "description": "Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...",
+    "summary": "Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...",
     "subjects": [
       "British and Irish fiction (fictional works by one author)",
       "political satire",
       "classic",
       "animal drama",
       "Fiction, political"
+    ],
+    "auto_categories": [
+      "Politics",
+      "Classics"
     ],
     "favorite": false,
     "collections": [],
@@ -40,7 +45,11 @@
     "rating": 4.4,
     "ratings_count": 220,
     "description": "External source file size: 4 MB",
+    "summary": "External source file size: 4 MB",
     "subjects": [],
+    "auto_categories": [
+      "General"
+    ],
     "favorite": false,
     "collections": [],
     "notes": "",

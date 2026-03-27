@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,7 @@ METADATA_FILE = LIBRARY_DIR / "_metadata.json"
 SETTINGS_FILE = LIBRARY_DIR / "_settings.json"
 HISTORY_FILE = LIBRARY_DIR / "_history.json"
 TRANSFER_HISTORY_FILE = LIBRARY_DIR / "_transfer_history.json"
+USAGE_FILE = LIBRARY_DIR / "_usage.json"
 EXPORT_DIR = LIBRARY_DIR / "exports"
 EXPORT_DIR.mkdir(exist_ok=True)
 
@@ -31,6 +33,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "theme_preset": "Corporate Blue",
     "notifications_enabled": True,
     "allowed_sources": ["Project Gutenberg", "Open Library", "External"],
+    "telemetry_enabled": True,
+    "interface_language": "English",
 }
 
 
@@ -51,6 +55,41 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _smart_summary(title: str, author: str, description: str) -> str:
+    text = " ".join(description.replace("\n", " ").split()).strip()
+    if not text:
+        base = title.strip() or "Untitled"
+        creator = author.strip()
+        return f"{base} by {creator}." if creator else base
+    trimmed = text[:260].strip()
+    if len(text) > 260:
+        cut = max(trimmed.rfind(". "), trimmed.rfind("; "), trimmed.rfind(", "))
+        trimmed = trimmed[:cut].strip() if cut > 120 else trimmed.rstrip(" ,;:")
+        trimmed = f"{trimmed}..."
+    return trimmed
+
+
+def _auto_categories(title: str, description: str, subjects: list[str], tags: list[str]) -> list[str]:
+    haystack = " ".join([title, description, " ".join(subjects), " ".join(tags)]).lower()
+    rules = [
+        ("Politics", ["politic", "state", "government", "revolution", "war", "ideolog"]),
+        ("Philosophy", ["philosoph", "ethic", "metaphys", "exist", "reason"]),
+        ("Science Fiction", ["science fiction", "dystopia", "future", "space", "robot"]),
+        ("Fantasy", ["fantasy", "myth", "dragon", "magic", "legend"]),
+        ("Business", ["business", "management", "finance", "leadership", "strategy"]),
+        ("History", ["history", "histor", "ancient", "empire", "civilization"]),
+        ("Essays", ["essay", "criticism", "articles", "collection of essays"]),
+        ("Children", ["children", "child", "young reader", "fairy tale"]),
+        ("Classics", ["classic", "novel", "public domain", "literature"]),
+    ]
+    categories = [label for label, keywords in rules if any(keyword in haystack for keyword in keywords)]
+    if not categories and subjects:
+        categories = [subject.strip().title() for subject in subjects[:3] if subject.strip()]
+    if not categories:
+        categories = ["General"]
+    return categories[:3]
+
+
 def _normalise_book(entry: dict[str, Any]) -> dict[str, Any]:
     collections = entry.get("collections", [])
     if not isinstance(collections, list):
@@ -61,6 +100,12 @@ def _normalise_book(entry: dict[str, Any]) -> dict[str, Any]:
     tags = entry.get("tags", [])
     if not isinstance(tags, list):
         tags = []
+    summary = entry.get("summary", "")
+    if not isinstance(summary, str):
+        summary = ""
+    auto_categories = entry.get("auto_categories", [])
+    if not isinstance(auto_categories, list):
+        auto_categories = []
 
     normalized = {
         "id": entry.get("id") or str(uuid.uuid4())[:8],
@@ -75,7 +120,9 @@ def _normalise_book(entry: dict[str, Any]) -> dict[str, Any]:
         "rating": float(entry.get("rating", 0.0) or 0.0),
         "ratings_count": int(entry.get("ratings_count", 0) or 0),
         "description": entry.get("description", ""),
+        "summary": summary.strip() or _smart_summary(entry.get("title", "Unknown"), entry.get("author", ""), entry.get("description", "")),
         "subjects": [str(item).strip() for item in subjects if str(item).strip()],
+        "auto_categories": [str(item).strip() for item in (auto_categories or _auto_categories(entry.get("title", "Unknown"), entry.get("description", ""), subjects, tags)) if str(item).strip()][:3],
         "favorite": bool(entry.get("favorite", False)),
         "collections": sorted({str(item).strip() for item in collections if str(item).strip()}),
         "notes": entry.get("notes", ""),
@@ -322,6 +369,30 @@ def update_settings(**changes: Any) -> dict[str, Any]:
     return settings
 
 
+def record_usage_event(event: str, **details: Any) -> dict[str, Any]:
+    history = _read_json(USAGE_FILE, [])
+    if not isinstance(history, list):
+        history = []
+    entry = {
+        "id": str(uuid.uuid4())[:8],
+        "timestamp": _now_iso(),
+        "event": event,
+        "details": {key: value for key, value in details.items()},
+    }
+    history.insert(0, entry)
+    _write_json(USAGE_FILE, history[:1000])
+    return entry
+
+
+def get_usage_events(limit: int | None = None) -> list[dict[str, Any]]:
+    data = _read_json(USAGE_FILE, [])
+    if not isinstance(data, list):
+        return []
+    events = [item for item in data if isinstance(item, dict)]
+    events.sort(key=lambda item: item.get("timestamp", ""), reverse=True)
+    return events[:limit] if limit is not None else events
+
+
 def get_download_history(limit: int | None = None) -> list[dict[str, Any]]:
     data = _read_json(HISTORY_FILE, [])
     if not isinstance(data, list):
@@ -414,11 +485,25 @@ def get_library_analytics() -> dict[str, Any]:
     by_format: dict[str, int] = {}
     by_status: dict[str, int] = {}
     by_language: dict[str, int] = {}
+    by_category: Counter[str] = Counter()
     for book in books:
         by_source[book.get("source", "Unknown")] = by_source.get(book.get("source", "Unknown"), 0) + 1
         by_format[book.get("format", "").upper() or "Unknown"] = by_format.get(book.get("format", "").upper() or "Unknown", 0) + 1
         by_status[book.get("reading_status", "Unread")] = by_status.get(book.get("reading_status", "Unread"), 0) + 1
         by_language[book.get("language", "Unknown") or "Unknown"] = by_language.get(book.get("language", "Unknown") or "Unknown", 0) + 1
+        by_category.update(book.get("auto_categories", []))
+    usage_events = get_usage_events()
+    event_counter = Counter(event.get("event", "unknown") for event in usage_events)
+    recent_downloads = get_download_history(limit=100)
+    trending_counter = Counter(
+        f"{entry.get('title', 'Unknown')}|{entry.get('author', '')}"
+        for entry in recent_downloads
+        if entry.get("status") == "success"
+    )
+    trending_titles = []
+    for key, count in trending_counter.most_common(5):
+        title, author = key.split("|", 1)
+        trending_titles.append({"title": title, "author": author, "count": count})
     return {
         "total_books": len(books),
         "favorites": sum(1 for book in books if book.get("favorite")),
@@ -428,6 +513,10 @@ def get_library_analytics() -> dict[str, Any]:
         "by_format": dict(sorted(by_format.items(), key=lambda item: item[1], reverse=True)),
         "by_status": dict(sorted(by_status.items(), key=lambda item: item[1], reverse=True)),
         "by_language": dict(sorted(by_language.items(), key=lambda item: item[1], reverse=True)),
+        "by_category": dict(by_category.most_common()),
+        "trending_titles": trending_titles,
+        "usage_events": len(usage_events),
+        "usage_by_event": dict(event_counter.most_common(6)),
     }
 
 

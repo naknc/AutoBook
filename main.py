@@ -33,9 +33,11 @@ from app.library import (
     get_recommendations,
     get_settings,
     get_transfer_history,
+    get_usage_events,
     list_collections,
     list_tags,
     organize_library_files,
+    record_usage_event,
     scan_library_health,
     record_download_history,
     record_transfer_history,
@@ -107,6 +109,35 @@ _UA = {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
     )
+}
+
+_I18N = {
+    "English": {
+        "Catalog Search": "Catalog Search",
+        "Library": "Library",
+        "Download History": "Download History",
+        "Analytics": "Analytics",
+        "Devices": "Devices",
+        "Settings": "Settings",
+        "Trending titles": "Trending titles",
+        "Auto categories": "Auto categories",
+        "Recent usage events": "Recent usage events",
+        "Interface language": "Interface language",
+        "Enable local usage telemetry": "Enable local usage telemetry",
+    },
+    "Turkish": {
+        "Catalog Search": "Katalog Arama",
+        "Library": "Kütüphane",
+        "Download History": "İndirme Geçmişi",
+        "Analytics": "Analitik",
+        "Devices": "Cihazlar",
+        "Settings": "Ayarlar",
+        "Trending titles": "Öne çıkan kitaplar",
+        "Auto categories": "Otomatik kategoriler",
+        "Recent usage events": "Son kullanım olayları",
+        "Interface language": "Arayüz dili",
+        "Enable local usage telemetry": "Yerel kullanım telemetrisini etkinleştir",
+    },
 }
 
 
@@ -252,6 +283,10 @@ class AutoBookApp(ctk.CTk):
         self._build_shell()
         self._show_search()
 
+    def _t(self, text: str) -> str:
+        language = self.settings.get("interface_language", "English")
+        return _I18N.get(language, {}).get(text, text)
+
     def _apply_theme_preset(self, preset_name: str) -> None:
         preset = _THEME_PRESETS.get(preset_name, _THEME_PRESETS["Corporate Blue"])
         globals().update(preset)
@@ -263,6 +298,14 @@ class AutoBookApp(ctk.CTk):
             messagebox.showinfo(title, message)
         except Exception:
             log_exception("Notification display failed")
+
+    def _track(self, event: str, **details: Any) -> None:
+        try:
+            if not self.settings.get("telemetry_enabled", True):
+                return
+            record_usage_event(event, **details)
+        except Exception:
+            log_exception(f"Usage telemetry failed event={event!r}")
 
     def _build_shell(self) -> None:
         sidebar = ctk.CTkFrame(self, width=255, corner_radius=0, fg_color=_NAV_BG)
@@ -282,12 +325,12 @@ class AutoBookApp(ctk.CTk):
         nav = ctk.CTkFrame(sidebar, fg_color="transparent")
         nav.pack(fill="x", padx=16, pady=(8, 0))
         for key, label, cmd in [
-            ("search", "Catalog Search", self._show_search),
-            ("library", "Library", self._show_library),
-            ("history", "Download History", self._show_history),
-            ("analytics", "Analytics", self._show_analytics),
-            ("devices", "Devices", self._show_devices),
-            ("settings", "Settings", self._show_settings),
+            ("search", self._t("Catalog Search"), self._show_search),
+            ("library", self._t("Library"), self._show_library),
+            ("history", self._t("Download History"), self._show_history),
+            ("analytics", self._t("Analytics"), self._show_analytics),
+            ("devices", self._t("Devices"), self._show_devices),
+            ("settings", self._t("Settings"), self._show_settings),
         ]:
             self._add_nav_button(nav, key, label, cmd)
 
@@ -308,6 +351,13 @@ class AutoBookApp(ctk.CTk):
         self.content = ctk.CTkFrame(self, corner_radius=0, fg_color=_APP_BG)
         self.content.pack(side="right", fill="both", expand=True)
         self.content.pack_propagate(False)
+
+    def _build_shell_refresh(self) -> None:
+        for child in self.winfo_children():
+            child.destroy()
+        self.nav_buttons = {}
+        self._build_shell()
+        self._show_settings()
 
     def _add_nav_button(self, parent: ctk.CTkFrame, key: str, label: str, command: Callable[[], None]) -> None:
         button = ctk.CTkButton(
@@ -500,6 +550,7 @@ class AutoBookApp(ctk.CTk):
         self._set_active_nav("search")
         self._clear_content()
         self._refresh_settings_cache()
+        self._track("view_search")
 
         self._create_header("Catalog Search", "Find titles and stay in the result stream.")
 
@@ -646,6 +697,7 @@ class AutoBookApp(ctk.CTk):
         if not query:
             self._set_status("Please enter a search query.")
             return
+        self._track("search_submitted", query=query[:80])
 
         for widget in self.results_frame.winfo_children():
             widget.destroy()
@@ -884,6 +936,7 @@ class AutoBookApp(ctk.CTk):
                         filename=filename,
                         message="Download completed.",
                     )
+                    self._track("download_success", title=book.title, source=book.source, format=link.format.upper())
                     log_info(f"Downloaded book title={book.title!r} format={link.format!r}")
                     return filename, f'"{book.title}" added to the library.'
                 except Exception as exc:
@@ -903,6 +956,7 @@ class AutoBookApp(ctk.CTk):
                 status="failed",
                 message=last_error,
             )
+            self._track("download_failed", title=book.title, source=book.source, format=selected_link.format.upper())
             raise RuntimeError(last_error)
 
         def _done(_result: tuple[str, str]) -> None:
@@ -1146,7 +1200,7 @@ class AutoBookApp(ctk.CTk):
                 ).pack(anchor="ne", padx=10, pady=(10, 0))
             ctk.CTkLabel(card, text=book.get("title", "Unknown"), font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT, wraplength=260, justify="left").pack(anchor="w", padx=16, pady=(8, 4))
             ctk.CTkLabel(card, text=book.get("author", ""), font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", padx=16)
-            ctk.CTkLabel(card, text=book.get("description", "")[:120], font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT, wraplength=260, justify="left").pack(anchor="w", padx=16, pady=(8, 10))
+            ctk.CTkLabel(card, text=book.get("summary", "")[:120], font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT, wraplength=260, justify="left").pack(anchor="w", padx=16, pady=(8, 10))
             badges = ctk.CTkFrame(card, fg_color="transparent")
             badges.pack(anchor="w", padx=16, pady=(0, 10))
             for text, color in [
@@ -1155,6 +1209,8 @@ class AutoBookApp(ctk.CTk):
             ]:
                 if text:
                     self._make_badge(badges, text, color)
+            for category in book.get("auto_categories", [])[:2]:
+                self._make_badge(badges, category, _CARD_BG)
             ctk.CTkButton(card, text="Edit", width=90, height=32, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=lambda b=book: self._edit_book_details(b["id"])).pack(anchor="w", padx=16, pady=(0, 16))
 
     def _make_library_card(self, book: dict[str, Any]) -> None:
@@ -1198,8 +1254,8 @@ class AutoBookApp(ctk.CTk):
 
         if book.get("author"):
             ctk.CTkLabel(info, text=book["author"], font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED, anchor="w").pack(anchor="w", pady=(4, 8))
-        if book.get("description"):
-            ctk.CTkLabel(info, text=book["description"][:180], font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, wraplength=content_width, justify="left").pack(anchor="w", pady=(0, 8))
+        if book.get("summary"):
+            ctk.CTkLabel(info, text=book["summary"][:180], font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, wraplength=content_width, justify="left").pack(anchor="w", pady=(0, 8))
 
         badges = ctk.CTkFrame(info, fg_color="transparent")
         badges.pack(anchor="w")
@@ -1215,6 +1271,8 @@ class AutoBookApp(ctk.CTk):
             self._make_badge(badges, collection, _SUCCESS)
         for tag in book.get("tags", [])[:2]:
             self._make_badge(badges, f"#{tag}", _CARD_BG)
+        for category in book.get("auto_categories", [])[:2]:
+            self._make_badge(badges, category, _ACCENT_SOFT)
 
         if book.get("notes"):
             ctk.CTkLabel(info, text=f'Notes: {book.get("notes", "")[:90]}', font=ctk.CTkFont(size=11), text_color=_TEXT_SOFT, wraplength=content_width, justify="left").pack(anchor="w", pady=(10, 0))
@@ -1468,6 +1526,7 @@ class AutoBookApp(ctk.CTk):
     def _show_history(self) -> None:
         self._set_active_nav("history")
         self._clear_content()
+        self._track("view_history")
         history = get_download_history()
         self._create_header("Download History", "Review successful and failed download attempts with timestamps and messages.", "Refresh", self._show_history)
         self._summary_row(self._history_summary_items(history))
@@ -1496,6 +1555,7 @@ class AutoBookApp(ctk.CTk):
     def _show_analytics(self) -> None:
         self._set_active_nav("analytics")
         self._clear_content()
+        self._track("view_analytics")
         analytics = get_library_analytics()
         self._create_header("Analytics", "Inspect format, source, language and reading-state distribution across the local library.")
         self._summary_row(
@@ -1503,7 +1563,7 @@ class AutoBookApp(ctk.CTk):
                 ("Books", str(analytics.get("total_books", 0))),
                 ("Favorites", str(analytics.get("favorites", 0))),
                 ("Collections", str(analytics.get("collections", 0))),
-                ("Tags", str(analytics.get("tags", 0))),
+                (self._t("Usage telemetry"), str(analytics.get("usage_events", 0))),
             ]
         )
         self.inline_status = ctk.CTkLabel(self.content, text="Analytics are calculated from the local library metadata.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
@@ -1516,6 +1576,8 @@ class AutoBookApp(ctk.CTk):
             ("By Format", analytics.get("by_format", {})),
             ("By Reading Status", analytics.get("by_status", {})),
             ("By Language", analytics.get("by_language", {})),
+            (self._t("Auto categories"), analytics.get("by_category", {})),
+            (self._t("Usage telemetry"), analytics.get("usage_by_event", {})),
         ]
         for title, values in sections:
             card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
@@ -1530,11 +1592,37 @@ class AutoBookApp(ctk.CTk):
                 ctk.CTkLabel(row, text=str(key), font=ctk.CTkFont(size=13), text_color=_TEXT).pack(side="left")
                 ctk.CTkLabel(row, text=str(count), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_MUTED).pack(side="right")
 
+        trending = analytics.get("trending_titles", [])
+        if trending:
+            card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            card.pack(fill="x", padx=2, pady=6)
+            ctk.CTkLabel(card, text=self._t("Trending titles"), font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(16, 10))
+            for item in trending:
+                row = ctk.CTkFrame(card, fg_color="transparent")
+                row.pack(fill="x", padx=18, pady=4)
+                text = item.get("title", "Unknown")
+                if item.get("author"):
+                    text = f"{text} - {item['author']}"
+                ctk.CTkLabel(row, text=text, font=ctk.CTkFont(size=13), text_color=_TEXT).pack(side="left")
+                ctk.CTkLabel(row, text=f"{item.get('count', 0)} download(s)", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_MUTED).pack(side="right")
+
+        usage_events = get_usage_events(limit=8)
+        if usage_events:
+            card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            card.pack(fill="x", padx=2, pady=6)
+            ctk.CTkLabel(card, text=self._t("Recent usage events"), font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(16, 10))
+            for event in usage_events:
+                row = ctk.CTkFrame(card, fg_color="transparent")
+                row.pack(fill="x", padx=18, pady=4)
+                ctk.CTkLabel(row, text=event.get("event", "unknown"), font=ctk.CTkFont(size=13), text_color=_TEXT).pack(side="left")
+                ctk.CTkLabel(row, text=event.get("timestamp", ""), font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT).pack(side="right")
+
     # Devices page
 
     def _show_devices(self) -> None:
         self._set_active_nav("devices")
         self._clear_content()
+        self._track("view_devices")
         devices = detect_devices()
         transfers = get_transfer_history(limit=6)
         self._create_header("Devices", "Review connected reading devices, install MTP support and run connection diagnostics.", "Scan", self._show_devices)
@@ -1685,11 +1773,13 @@ class AutoBookApp(ctk.CTk):
         try:
             result = copy_to_device(str(path), device, subdir=subdir)
             record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="success", message=result)
+            self._track("transfer_success", title=book.get("title", "Unknown"), device=device.name)
             log_info(f'Transfer completed book={book.get("title", "")!r} device={device.name!r}')
             self._set_status(f'Transfer completed to {device.name}. {result}')
             self._notify("AutoBook", f'Transfer completed to {device.name}.')
         except Exception as exc:
             record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="failed", message=str(exc))
+            self._track("transfer_failed", title=book.get("title", "Unknown"), device=device.name)
             log_exception("Device transfer failed")
             self._set_status(f"Transfer failed: {exc}")
 
@@ -1699,6 +1789,7 @@ class AutoBookApp(ctk.CTk):
         self._set_active_nav("settings")
         self._clear_content()
         self._refresh_settings_cache()
+        self._track("view_settings")
         self._create_header("Settings", "Configure preferred formats, source defaults, transfer behavior and logging access.")
         self._summary_row(
             [
@@ -1717,6 +1808,8 @@ class AutoBookApp(ctk.CTk):
         self.settings_organize_var = tk.StringVar(value=self.settings.get("auto_organize_by", "None"))
         self.settings_theme_var = tk.StringVar(value=self.settings.get("theme_preset", "Corporate Blue"))
         self.settings_notifications_var = tk.BooleanVar(value=bool(self.settings.get("notifications_enabled", True)))
+        self.settings_telemetry_var = tk.BooleanVar(value=bool(self.settings.get("telemetry_enabled", True)))
+        self.settings_language_var = tk.StringVar(value=self.settings.get("interface_language", "English"))
         allowed_sources = set(self.settings.get("allowed_sources", ["Project Gutenberg", "Open Library", "External"]))
         self.allow_gutenberg_var = tk.BooleanVar(value="Project Gutenberg" in allowed_sources)
         self.allow_openlibrary_var = tk.BooleanVar(value="Open Library" in allowed_sources)
@@ -1789,6 +1882,18 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
+        self._make_settings_field(form, 3, 0, self._t("Interface language"), ctk.CTkOptionMenu(
+            form,
+            values=["English", "Turkish"],
+            variable=self.settings_language_var,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ))
 
         toggles = ctk.CTkFrame(panel, fg_color="transparent")
         toggles.pack(fill="x", padx=18, pady=(0, 12))
@@ -1810,6 +1915,15 @@ class AutoBookApp(ctk.CTk):
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
         ).pack(anchor="w")
+        ctk.CTkCheckBox(
+            toggles,
+            text=self._t("Enable local usage telemetry"),
+            variable=self.settings_telemetry_var,
+            text_color=_TEXT,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            border_color=_CARD_BORDER,
+        ).pack(anchor="w", pady=(10, 0))
 
         source_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
         source_panel.pack(fill="x", padx=18, pady=(0, 12))
@@ -1861,9 +1975,17 @@ class AutoBookApp(ctk.CTk):
         self.inline_status = ctk.CTkLabel(self.content, text=f"Log file: {LOG_FILE}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
-    def _make_settings_field(self, parent: ctk.CTkFrame, row: int, column: int, label: str, widget: Any) -> None:
-        field = ctk.CTkFrame(parent, fg_color="transparent")
-        field.grid(row=row, column=column, sticky="ew", padx=8, pady=8)
+    def _make_settings_field(self, parent: ctk.CTkFrame, *args: Any) -> None:
+        if len(args) == 4:
+            row, column, label, widget = args
+            field = ctk.CTkFrame(parent, fg_color="transparent")
+            field.grid(row=row, column=column, sticky="ew", padx=8, pady=8)
+        elif len(args) == 2:
+            label, widget = args
+            field = ctk.CTkFrame(parent, fg_color="transparent")
+            field.pack(fill="x", pady=8)
+        else:
+            raise TypeError("_make_settings_field expects either (row, column, label, widget) or (label, widget)")
         ctk.CTkLabel(field, text=label, font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", pady=(0, 6))
         widget.pack(fill="x")
 
@@ -1878,12 +2000,16 @@ class AutoBookApp(ctk.CTk):
                 auto_organize_by=self.settings_organize_var.get(),
                 theme_preset=self.settings_theme_var.get(),
                 notifications_enabled=bool(self.settings_notifications_var.get()),
+                telemetry_enabled=bool(self.settings_telemetry_var.get()),
+                interface_language=self.settings_language_var.get(),
                 allowed_sources=self._selected_allowed_sources(),
             )
             self._refresh_settings_cache()
             self._apply_theme_preset(self.settings.get("theme_preset", "Corporate Blue"))
+            self._track("settings_saved", language=self.settings.get("interface_language", "English"))
             self._set_status("Settings saved.")
             self._notify("AutoBook", "Settings were updated.")
+            self._build_shell_refresh()
         except Exception:
             log_exception("Settings save failed")
             self._set_status("Settings save failed. Check the log for details.")
@@ -1901,6 +2027,7 @@ class AutoBookApp(ctk.CTk):
     def _export_snapshot(self) -> None:
         try:
             path = export_library_snapshot()
+            self._track("snapshot_exported", filename=path.name)
             log_info(f"Library snapshot exported path={str(path)!r}")
             self._set_status(f"Snapshot exported to {path.name}.")
             self._notify("AutoBook", f"Snapshot exported to {path.name}.")
@@ -1915,6 +2042,7 @@ class AutoBookApp(ctk.CTk):
             return
         try:
             result = import_library_snapshot(path.strip())
+            self._track("snapshot_imported", imported=result["imported"], skipped=result["skipped"])
             log_info(f"Snapshot import completed imported={result['imported']} skipped={result['skipped']}")
             self._set_status(f"Imported {result['imported']} book(s), skipped {result['skipped']}.")
             self._notify("AutoBook", f"Imported {result['imported']} book(s).")
@@ -1928,6 +2056,7 @@ class AutoBookApp(ctk.CTk):
             moved = organize_library_files(mode)
             update_settings(auto_organize_by=mode)
             self._refresh_settings_cache()
+            self._track("auto_organize", mode=mode, moved=moved)
             log_info(f"Auto organize completed mode={mode!r} moved={moved}")
             self._set_status(f"Auto organize complete. {moved} file(s) moved.")
             self._notify("AutoBook", f"Auto organize complete. {moved} file(s) moved.")
@@ -1939,6 +2068,7 @@ class AutoBookApp(ctk.CTk):
         try:
             results = scan_library_health()
             issues = [item for item in results if item["status"] != "healthy"]
+            self._track("health_scan", issues=len(issues))
             log_info(f"Library health scan completed issues={len(issues)}")
             self._show_health_scan_report(results)
             self._set_status(f"Health scan completed. {len(issues)} issue(s) found.")
