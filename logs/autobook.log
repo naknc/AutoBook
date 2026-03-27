@@ -68,3 +68,6 @@ Traceback (most recent call last):
 requests.exceptions.ConnectionError: HTTPSConnectionPool(host='libgen.vg', port=443): Read timed out.
 2026-03-27 22:04:58,096 | INFO | MainThread | Logging initialized
 2026-03-27 22:05:32,773 | INFO | MainThread | Logging initialized
+2026-03-27 22:10:41,710 | INFO | MainThread | Logging initialized
+2026-03-27 22:10:58,331 | INFO | autobook-worker | Running search for query='george orwell'
+2026-03-27 22:13:53,202 | INFO | autobook-worker | Running search for query='animal farm'
