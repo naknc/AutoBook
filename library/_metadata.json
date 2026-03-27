@@ -1,7 +1,7 @@
 [
   {
     "id": "b4f4659e",
-    "filename": "Animal Farm.epub",
+    "filename": "George Orwell/Animal Farm.epub",
     "title": "Animal Farm",
     "author": "George Orwell",
     "format": "epub",
@@ -25,11 +25,11 @@
     "reading_status": "Unread",
     "tags": [],
     "downloaded_at": "2026-03-27T22:25:35",
-    "updated_at": "2026-03-27T22:25:35"
+    "updated_at": "2026-03-27T22:37:54"
   },
   {
     "id": "113a298d",
-    "filename": "Animal Farm_1.epub",
+    "filename": "George Orwell/Animal Farm_1.epub",
     "title": "Animal Farm",
     "author": "George Orwell",
     "format": "epub",
@@ -53,11 +53,11 @@
     "reading_status": "Unread",
     "tags": [],
     "downloaded_at": "2026-03-27T22:28:43",
-    "updated_at": "2026-03-27T22:28:43"
+    "updated_at": "2026-03-27T22:37:54"
   },
   {
     "id": "afe43208",
-    "filename": "The Little Prince Read-Aloud Storybook.epub",
+    "filename": "Antoine De Saint-Exupéry/The Little Prince Read-Aloud Storybook.epub",
     "title": "The Little Prince Read-Aloud Storybook",
     "author": "Antoine De Saint-Exupéry",
     "format": "epub",
@@ -75,6 +75,6 @@
     "reading_status": "Unread",
     "tags": [],
     "downloaded_at": "2026-03-27T22:34:11",
-    "updated_at": "2026-03-27T22:34:11"
+    "updated_at": "2026-03-27T22:37:54"
   }
 ]

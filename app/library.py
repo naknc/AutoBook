@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "open_library_after_download": True,
     "library_view": "List",
     "auto_organize_by": "None",
+    "theme_preset": "Corporate Blue",
+    "notifications_enabled": True,
+    "allowed_sources": ["Project Gutenberg", "Open Library", "External"],
 }
 
 
@@ -494,3 +498,43 @@ def organize_library_files(mode: str = "None") -> int:
     if moved:
         _save_metadata(metadata)
     return moved
+
+
+def scan_library_health() -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for book in _load_metadata():
+        filename = book.get("filename", "")
+        path = LIBRARY_DIR / filename
+        status = "healthy"
+        message = "File looks valid."
+        if not path.exists():
+            status = "missing"
+            message = "File is missing from disk."
+        elif path.suffix.lower() == ".epub":
+            try:
+                with zipfile.ZipFile(path, "r") as archive:
+                    if "mimetype" not in archive.namelist():
+                        status = "warning"
+                        message = "EPUB archive is missing the mimetype entry."
+            except Exception:
+                status = "corrupt"
+                message = "EPUB archive could not be opened."
+        elif path.suffix.lower() == ".pdf":
+            try:
+                header = path.read_bytes()[:5]
+                if header != b"%PDF-":
+                    status = "warning"
+                    message = "PDF header is not valid."
+            except Exception:
+                status = "corrupt"
+                message = "PDF could not be read."
+        results.append(
+            {
+                "id": book.get("id", ""),
+                "title": book.get("title", "Unknown"),
+                "filename": filename,
+                "status": status,
+                "message": message,
+            }
+        )
+    return results

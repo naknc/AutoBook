@@ -8,6 +8,7 @@ import platform
 import subprocess
 import threading
 import tkinter as tk
+from tkinter import messagebox
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
@@ -34,6 +35,8 @@ from app.library import (
     get_transfer_history,
     list_collections,
     list_tags,
+    organize_library_files,
+    scan_library_health,
     record_download_history,
     record_transfer_history,
     remove_from_library,
@@ -67,6 +70,37 @@ _SUCCESS = "#17B26A"
 _WARNING = "#F59E0B"
 _DANGER = "#D64545"
 _DANGER_HOVER = "#B83838"
+
+_THEME_PRESETS = {
+    "Corporate Blue": {
+        "_NAV_BG": "#0F172A",
+        "_APP_BG": "#0B1220",
+        "_SURFACE": "#111827",
+        "_SURFACE_ALT": "#1F2937",
+        "_CARD_BG": "#162033",
+        "_CARD_BORDER": "#273449",
+        "_TEXT": "#E5EEF9",
+        "_TEXT_MUTED": "#93A4BC",
+        "_TEXT_SOFT": "#6F839E",
+        "_ACCENT": "#2F6FED",
+        "_ACCENT_HOVER": "#275DCA",
+        "_ACCENT_SOFT": "#17305F",
+    },
+    "Slate Green": {
+        "_NAV_BG": "#101A18",
+        "_APP_BG": "#0A1211",
+        "_SURFACE": "#13201D",
+        "_SURFACE_ALT": "#1B2B27",
+        "_CARD_BG": "#18312A",
+        "_CARD_BORDER": "#2A443D",
+        "_TEXT": "#E7F3EF",
+        "_TEXT_MUTED": "#9BB9AF",
+        "_TEXT_SOFT": "#729086",
+        "_ACCENT": "#2F8F6B",
+        "_ACCENT_HOVER": "#277558",
+        "_ACCENT_SOFT": "#184438",
+    },
+}
 
 _UA = {
     "User-Agent": (
@@ -203,6 +237,7 @@ class AutoBookApp(ctk.CTk):
         super().__init__()
         self.logger = setup_logging()
         self.settings = get_settings()
+        self._apply_theme_preset(self.settings.get("theme_preset", "Corporate Blue"))
 
         self.title("AutoBook Workspace")
         self.geometry("1280x860")
@@ -216,6 +251,18 @@ class AutoBookApp(ctk.CTk):
         self.selected_book_ids: set[str] = set()
         self._build_shell()
         self._show_search()
+
+    def _apply_theme_preset(self, preset_name: str) -> None:
+        preset = _THEME_PRESETS.get(preset_name, _THEME_PRESETS["Corporate Blue"])
+        globals().update(preset)
+
+    def _notify(self, title: str, message: str) -> None:
+        if not self.settings.get("notifications_enabled", True):
+            return
+        try:
+            messagebox.showinfo(title, message)
+        except Exception:
+            log_exception("Notification display failed")
 
     def _build_shell(self) -> None:
         sidebar = ctk.CTkFrame(self, width=255, corner_radius=0, fg_color=_NAV_BG)
@@ -607,7 +654,7 @@ class AutoBookApp(ctk.CTk):
 
         def _work() -> list[BookResult]:
             log_info(f"Running search for query={query!r}")
-            return search_books(query)
+            return search_books(query, allowed_sources=self.settings.get("allowed_sources", []))
 
         def _done(results: list[BookResult]) -> None:
             self.current_search_results = results
@@ -745,6 +792,9 @@ class AutoBookApp(ctk.CTk):
 
     def _download_book(self, selected_link: Any, book: BookResult) -> None:
         self._refresh_settings_cache()
+        if book.source and book.source not in self.settings.get("allowed_sources", []):
+            self._set_status(f"{book.source} is disabled by source access control.")
+            return
         self._set_status(f'Downloading "{book.title}" as {selected_link.format.upper()}...')
         self.update_idletasks()
 
@@ -858,6 +908,7 @@ class AutoBookApp(ctk.CTk):
         def _done(_result: tuple[str, str]) -> None:
             _, message = _result
             self._set_status(message)
+            self._notify("AutoBook", message)
             if self.settings.get("open_library_after_download", True):
                 self._show_library()
 
@@ -1636,6 +1687,7 @@ class AutoBookApp(ctk.CTk):
             record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="success", message=result)
             log_info(f'Transfer completed book={book.get("title", "")!r} device={device.name!r}')
             self._set_status(f'Transfer completed to {device.name}. {result}')
+            self._notify("AutoBook", f'Transfer completed to {device.name}.')
         except Exception as exc:
             record_transfer_history(title=book.get("title", "Unknown"), device_name=device.name, status="failed", message=str(exc))
             log_exception("Device transfer failed")
@@ -1663,6 +1715,12 @@ class AutoBookApp(ctk.CTk):
         self.settings_device_subdir_var = tk.StringVar(value=self.settings.get("device_subdir", ""))
         self.settings_open_library_var = tk.BooleanVar(value=bool(self.settings.get("open_library_after_download", True)))
         self.settings_organize_var = tk.StringVar(value=self.settings.get("auto_organize_by", "None"))
+        self.settings_theme_var = tk.StringVar(value=self.settings.get("theme_preset", "Corporate Blue"))
+        self.settings_notifications_var = tk.BooleanVar(value=bool(self.settings.get("notifications_enabled", True)))
+        allowed_sources = set(self.settings.get("allowed_sources", ["Project Gutenberg", "Open Library", "External"]))
+        self.allow_gutenberg_var = tk.BooleanVar(value="Project Gutenberg" in allowed_sources)
+        self.allow_openlibrary_var = tk.BooleanVar(value="Open Library" in allowed_sources)
+        self.allow_external_var = tk.BooleanVar(value="External" in allowed_sources)
 
         form = ctk.CTkFrame(panel, fg_color="transparent")
         form.pack(fill="x", padx=18, pady=16)
@@ -1716,6 +1774,18 @@ class AutoBookApp(ctk.CTk):
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
         ))
+        self._make_settings_field(form, "Theme preset", ctk.CTkOptionMenu(
+            form,
+            values=list(_THEME_PRESETS.keys()),
+            variable=self.settings_theme_var,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ))
 
         ctk.CTkCheckBox(
             panel,
@@ -1726,6 +1796,35 @@ class AutoBookApp(ctk.CTk):
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
         ).pack(anchor="w", padx=18, pady=(0, 12))
+        ctk.CTkCheckBox(
+            panel,
+            text="Enable notifications",
+            variable=self.settings_notifications_var,
+            text_color=_TEXT,
+            fg_color=_ACCENT,
+            hover_color=_ACCENT_HOVER,
+            border_color=_CARD_BORDER,
+        ).pack(anchor="w", padx=18, pady=(0, 12))
+
+        source_panel = ctk.CTkFrame(panel, fg_color=_CARD_BG, corner_radius=14, border_width=1, border_color=_CARD_BORDER)
+        source_panel.pack(fill="x", padx=18, pady=(0, 12))
+        ctk.CTkLabel(source_panel, text="Allowed sources", font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=14, pady=(12, 8))
+        source_row = ctk.CTkFrame(source_panel, fg_color="transparent")
+        source_row.pack(fill="x", padx=14, pady=(0, 12))
+        for text, var in [
+            ("Project Gutenberg", self.allow_gutenberg_var),
+            ("Open Library", self.allow_openlibrary_var),
+            ("External", self.allow_external_var),
+        ]:
+            ctk.CTkCheckBox(
+                source_row,
+                text=text,
+                variable=var,
+                text_color=_TEXT,
+                fg_color=_ACCENT,
+                hover_color=_ACCENT_HOVER,
+                border_color=_CARD_BORDER,
+            ).pack(side="left", padx=(0, 14))
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
         action_row.pack(fill="x", padx=18, pady=(0, 16))
@@ -1734,6 +1833,7 @@ class AutoBookApp(ctk.CTk):
         ctk.CTkButton(action_row, text="Export Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._export_snapshot).pack(side="left", padx=(10, 0))
         ctk.CTkButton(action_row, text="Import Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._import_snapshot).pack(side="left", padx=(10, 0))
         ctk.CTkButton(action_row, text="Run Organize", width=130, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._run_auto_organize).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(action_row, text="Health Scan", width=124, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._run_health_scan).pack(side="left", padx=(10, 0))
 
         self.inline_status = ctk.CTkLabel(self.content, text=f"Log file: {LOG_FILE}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
         self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
@@ -1753,18 +1853,34 @@ class AutoBookApp(ctk.CTk):
                 device_subdir=self.settings_device_subdir_var.get().strip(),
                 open_library_after_download=bool(self.settings_open_library_var.get()),
                 auto_organize_by=self.settings_organize_var.get(),
+                theme_preset=self.settings_theme_var.get(),
+                notifications_enabled=bool(self.settings_notifications_var.get()),
+                allowed_sources=self._selected_allowed_sources(),
             )
             self._refresh_settings_cache()
+            self._apply_theme_preset(self.settings.get("theme_preset", "Corporate Blue"))
             self._set_status("Settings saved.")
+            self._notify("AutoBook", "Settings were updated.")
         except Exception:
             log_exception("Settings save failed")
             self._set_status("Settings save failed. Check the log for details.")
+
+    def _selected_allowed_sources(self) -> list[str]:
+        allowed = []
+        if self.allow_gutenberg_var.get():
+            allowed.append("Project Gutenberg")
+        if self.allow_openlibrary_var.get():
+            allowed.append("Open Library")
+        if self.allow_external_var.get():
+            allowed.append("External")
+        return allowed or ["Project Gutenberg", "Open Library"]
 
     def _export_snapshot(self) -> None:
         try:
             path = export_library_snapshot()
             log_info(f"Library snapshot exported path={str(path)!r}")
             self._set_status(f"Snapshot exported to {path.name}.")
+            self._notify("AutoBook", f"Snapshot exported to {path.name}.")
         except Exception:
             log_exception("Snapshot export failed")
             self._set_status("Snapshot export failed. Check the log for details.")
@@ -1778,6 +1894,7 @@ class AutoBookApp(ctk.CTk):
             result = import_library_snapshot(path.strip())
             log_info(f"Snapshot import completed imported={result['imported']} skipped={result['skipped']}")
             self._set_status(f"Imported {result['imported']} book(s), skipped {result['skipped']}.")
+            self._notify("AutoBook", f"Imported {result['imported']} book(s).")
         except Exception as exc:
             log_exception("Snapshot import failed")
             self._set_status(f"Snapshot import failed: {exc}")
@@ -1790,9 +1907,37 @@ class AutoBookApp(ctk.CTk):
             self._refresh_settings_cache()
             log_info(f"Auto organize completed mode={mode!r} moved={moved}")
             self._set_status(f"Auto organize complete. {moved} file(s) moved.")
+            self._notify("AutoBook", f"Auto organize complete. {moved} file(s) moved.")
         except Exception:
             log_exception("Auto organize failed")
             self._set_status("Auto organize failed. Check the log for details.")
+
+    def _run_health_scan(self) -> None:
+        try:
+            results = scan_library_health()
+            issues = [item for item in results if item["status"] != "healthy"]
+            log_info(f"Library health scan completed issues={len(issues)}")
+            self._show_health_scan_report(results)
+            self._set_status(f"Health scan completed. {len(issues)} issue(s) found.")
+        except Exception:
+            log_exception("Health scan failed")
+            self._set_status("Health scan failed. Check the log for details.")
+
+    def _show_health_scan_report(self, results: list[dict[str, Any]]) -> None:
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Library Health Scan")
+        dialog.geometry("720x520")
+        dialog.configure(fg_color=_APP_BG)
+        dialog.transient(self)
+        dialog.grab_set()
+        ctk.CTkLabel(dialog, text="Library Health Scan", font=ctk.CTkFont(size=22, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=20, pady=(18, 8))
+        box = ctk.CTkTextbox(dialog, fg_color=_SURFACE, text_color=_TEXT, corner_radius=16, wrap="word")
+        box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        if not results:
+            box.insert("end", "No library items found.")
+            return
+        for item in results:
+            box.insert("end", f"[{item['status'].upper()}] {item['title']} - {item['message']}\n")
 
     def _open_log_file(self) -> None:
         try:
@@ -1809,4 +1954,3 @@ class AutoBookApp(ctk.CTk):
 
 if __name__ == "__main__":
     AutoBookApp().mainloop()
-    organize_library_files,

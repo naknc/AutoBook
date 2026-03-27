@@ -641,26 +641,31 @@ def _fetch_ol_ratings(query: str, results: list[BookResult]) -> None:
         log_exception(f"Open Library rating enrichment failed for query={query!r}")
 
 
-def search_books(query: str) -> list[BookResult]:
+def search_books(query: str, allowed_sources: list[str] | None = None) -> list[BookResult]:
     """Search all sources in parallel and return merged results."""
     if not query or not query.strip():
         return []
+    enabled = set(allowed_sources or ["Project Gutenberg", "Open Library", "External"])
 
     with ThreadPoolExecutor(max_workers=4) as pool:
-        gut_fut = pool.submit(_search_gutenberg, query)
+        gut_fut = pool.submit(_search_gutenberg, query) if "Project Gutenberg" in enabled else None
         ol_eng_fut = pool.submit(
             _search_ol_single_language, query, "eng", "English", 8,
-        )
+        ) if "Open Library" in enabled else None
         ol_tur_fut = pool.submit(
             _search_ol_single_language, query, "tur", "Turkish", 3,
-        )
-        ext_fut = pool.submit(_search_external, query, 10)
+        ) if "Open Library" in enabled else None
+        ext_fut = pool.submit(_search_external, query, 10) if "External" in enabled else None
 
         results: list[BookResult] = []
-        results.extend(gut_fut.result())
-        results.extend(ol_eng_fut.result())
-        results.extend(ol_tur_fut.result())
-        results.extend(ext_fut.result())
+        if gut_fut:
+            results.extend(gut_fut.result())
+        if ol_eng_fut:
+            results.extend(ol_eng_fut.result())
+        if ol_tur_fut:
+            results.extend(ol_tur_fut.result())
+        if ext_fut:
+            results.extend(ext_fut.result())
 
     # Enrich all unrated results with OL ratings (best-effort)
     _fetch_ol_ratings(query, results)
