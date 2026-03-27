@@ -10,6 +10,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.logging_utils import log_exception
+
 
 @dataclass
 class ConnectedDevice:
@@ -43,6 +45,7 @@ def _detect_mtp_devices() -> list[ConnectedDevice]:
             ["mtp-detect"], text=True, stderr=subprocess.STDOUT, timeout=10,
         )
     except Exception:
+        log_exception("MTP device detection failed")
         return devices
 
     # Parse mtp-detect output for device info
@@ -94,6 +97,7 @@ def _mtp_send_file(src_path: str, dest_folder: str = "/documents") -> str:
                 return f"Sent to Kindle via MTP: {dest_folder}/{src.name}"
             # Some versions need different syntax
         except Exception:
+            log_exception("mtp-sendfile transfer failed")
             pass
 
     # Fallback: try mtp-connect with sendfile command
@@ -108,6 +112,7 @@ def _mtp_send_file(src_path: str, dest_folder: str = "/documents") -> str:
             if result.returncode == 0:
                 return f"Sent to Kindle via MTP: {dest_folder}/{src.name}"
         except Exception:
+            log_exception("mtp-connect transfer failed")
             pass
 
     raise RuntimeError(
@@ -198,7 +203,7 @@ def _detect_macos() -> list[ConnectedDevice]:
                            "Try a different cable or unlock the Kindle.",
                 ))
         except Exception:
-            pass
+            log_exception("macOS ioreg Kindle detection failed")
 
     # ── 5. ifuse-mounted iPad ──────────────────────────────────────
     ipad_mount = Path.home() / "ipad_mount"
@@ -218,6 +223,7 @@ def _parse_usb_devices() -> list[tuple[str, dict[str, str]]]:
             text=True, timeout=5,
         )
     except Exception:
+        log_exception("system_profiler USB parse failed")
         return result
 
     current_name = ""
@@ -272,7 +278,7 @@ def detect_devices() -> list[ConnectedDevice]:
     )()
 
 
-def copy_to_device(src_path: str, device: ConnectedDevice) -> str:
+def copy_to_device(src_path: str, device: ConnectedDevice, subdir: str = "") -> str:
     """Copy a book file to the device. Returns destination path or status message."""
     src = Path(src_path)
     if not src.exists():
@@ -280,7 +286,10 @@ def copy_to_device(src_path: str, device: ConnectedDevice) -> str:
 
     # MTP device – use libmtp tools
     if device.kind == "mtp":
-        return _mtp_send_file(src_path, "/documents")
+        target = "/documents"
+        if subdir.strip():
+            target = f"{target}/{subdir.strip().strip('/')}"
+        return _mtp_send_file(src_path, target)
 
     if device.kind == "ipad" and not device.mount_point:
         if platform.system() != "Darwin":
@@ -303,6 +312,9 @@ def copy_to_device(src_path: str, device: ConnectedDevice) -> str:
         docs = dest_dir / "documents"
         if docs.exists():
             dest_dir = docs
+    if subdir.strip():
+        dest_dir = dest_dir / subdir.strip().strip("/")
+        dest_dir.mkdir(parents=True, exist_ok=True)
 
     dest = dest_dir / src.name
     shutil.copy2(str(src), str(dest))

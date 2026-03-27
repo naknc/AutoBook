@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 import requests
 from bs4 import BeautifulSoup
 
+from app.logging_utils import log_exception
+
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -58,6 +60,8 @@ class BookResult:
     language: str = ""
     rating: float = 0.0
     ratings_count: int = 0
+    description: str = ""
+    subjects: list[str] = field(default_factory=list)
     downloads: list[DownloadLink] = field(default_factory=list)
 
 
@@ -141,7 +145,7 @@ def _search_gutenberg(query: str, max_results: int = 8) -> list[BookResult]:
                 )
             )
     except Exception:
-        pass
+        log_exception(f"Gutenberg search failed for query={query!r}")
     return results
 
 
@@ -174,6 +178,7 @@ def _ia_batch_lang_check(ia_ids: list[str], lang_code: str) -> set[str]:
         docs = resp.json().get("response", {}).get("docs", [])
         return {d["identifier"] for d in docs}
     except Exception:
+        log_exception("Internet Archive language batch check failed")
         return set()
 
 
@@ -220,7 +225,7 @@ def _get_ia_file_links(ia_id: str) -> list[DownloadLink]:
             if len(links) >= 4:
                 break
     except Exception:
-        pass
+        log_exception(f"Internet Archive metadata fetch failed for ia_id={ia_id!r}")
     return links
 
 
@@ -234,7 +239,7 @@ def _search_ol_single_language(
         resp = _get_session().get("https://openlibrary.org/search.json", params={
             "q": query, "language": lang_code, "limit": max_results * 3,
             "sort": "rating",
-            "fields": "key,title,author_name,first_publish_year,cover_i,ia,ratings_average,ratings_count",
+            "fields": "key,title,author_name,first_publish_year,cover_i,ia,ratings_average,ratings_count,subject,first_sentence",
         }, timeout=TIMEOUT)
         resp.raise_for_status()
         docs = resp.json().get("docs", [])
@@ -312,13 +317,15 @@ def _search_ol_single_language(
                     language=lang_label,
                     rating=round(doc.get("ratings_average", 0) or 0, 1),
                     ratings_count=doc.get("ratings_count", 0) or 0,
+                    description=_extract_first_sentence(doc.get("first_sentence")),
+                    subjects=_extract_subjects(doc.get("subject", [])),
                     downloads=downloads,
                 )
             )
             if len(results) >= max_results:
                 break
     except Exception:
-        pass
+        log_exception(f"Open Library search failed for query={query!r} lang={lang_code!r}")
     return results
 
 
@@ -454,12 +461,13 @@ def _search_external(query: str, max_results: int = 12) -> list[BookResult]:
                 year=year,
                 source="External",
                 language=lang,
+                description=f"External source file size: {size}",
                 downloads=downloads,
             ))
             if len(results) >= max_results:
                 break
     except Exception:
-        pass
+        log_exception(f"External source search failed for query={query!r}")
     return results
 
 
@@ -485,8 +493,32 @@ def resolve_external_download(ads_url: str) -> str | None:
                     p = urlparse(ads_url)
                     return f"{p.scheme}://{p.netloc}/{href.lstrip('/')}"
     except Exception:
-        pass
+        log_exception("External download resolution failed")
     return None
+
+
+def _extract_first_sentence(value: object) -> str:
+    if isinstance(value, dict):
+        text = value.get("value", "")
+        return _clean(str(text))
+    if isinstance(value, list) and value:
+        return _clean(str(value[0]))
+    if isinstance(value, str):
+        return _clean(value)
+    return ""
+
+
+def _extract_subjects(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: list[str] = []
+    for item in value:
+        text = _clean(str(item))
+        if text and text not in seen:
+            seen.append(text)
+        if len(seen) >= 5:
+            break
+    return seen
 
 
 def _normalise_title(title: str) -> str:
@@ -606,7 +638,7 @@ def _fetch_ol_ratings(query: str, results: list[BookResult]) -> None:
                         r.rating = best_rating
                         r.ratings_count = best_count
     except Exception:
-        pass
+        log_exception(f"Open Library rating enrichment failed for query={query!r}")
 
 
 def search_books(query: str) -> list[BookResult]:
