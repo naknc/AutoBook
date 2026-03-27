@@ -1,1 +1,35 @@
-[]
+[
+  {
+    "id": "e6172739",
+    "timestamp": "2026-03-27T22:34:11",
+    "title": "The Little Prince Read-Aloud Storybook",
+    "author": "Antoine De Saint-Exupéry",
+    "source": "External",
+    "format": "EPUB",
+    "status": "success",
+    "filename": "The Little Prince Read-Aloud Storybook.epub",
+    "message": "Download completed."
+  },
+  {
+    "id": "bf6a4928",
+    "timestamp": "2026-03-27T22:28:43",
+    "title": "Animal Farm",
+    "author": "George Orwell",
+    "source": "Open Library",
+    "format": "EPUB",
+    "status": "success",
+    "filename": "Animal Farm_1.epub",
+    "message": "Download completed."
+  },
+  {
+    "id": "8a49a3e5",
+    "timestamp": "2026-03-27T22:25:35",
+    "title": "Animal Farm",
+    "author": "George Orwell",
+    "source": "Open Library",
+    "format": "EPUB",
+    "status": "success",
+    "filename": "Animal Farm.epub",
+    "message": "Download completed."
+  }
+]

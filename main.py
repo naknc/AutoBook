@@ -22,10 +22,13 @@ from app.library import (
     add_to_library,
     apply_bulk_update,
     delete_books,
+    export_library_snapshot,
     get_all_books,
+    get_library_analytics,
     get_book,
     get_book_path,
     get_download_history,
+    import_library_snapshot,
     get_recommendations,
     get_settings,
     get_transfer_history,
@@ -235,6 +238,7 @@ class AutoBookApp(ctk.CTk):
             ("search", "Catalog Search", self._show_search),
             ("library", "Library", self._show_library),
             ("history", "Download History", self._show_history),
+            ("analytics", "Analytics", self._show_analytics),
             ("devices", "Devices", self._show_devices),
             ("settings", "Settings", self._show_settings),
         ]:
@@ -301,21 +305,21 @@ class AutoBookApp(ctk.CTk):
 
     def _create_header(self, title: str, subtitle: str, action_text: str | None = None, action_command: Callable[[], None] | None = None) -> None:
         header = ctk.CTkFrame(self.content, fg_color="transparent")
-        header.pack(fill="x", padx=28, pady=(24, 12))
+        header.pack(fill="x", padx=28, pady=(14, 8))
 
         text_col = ctk.CTkFrame(header, fg_color="transparent")
         text_col.pack(side="left", fill="x", expand=True)
-        ctk.CTkLabel(text_col, text=title, font=ctk.CTkFont(size=30, weight="bold"), text_color=_TEXT).pack(anchor="w")
-        ctk.CTkLabel(text_col, text=subtitle, font=ctk.CTkFont(size=14), text_color=_TEXT_MUTED).pack(anchor="w", pady=(4, 0))
+        ctk.CTkLabel(text_col, text=title, font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(anchor="w")
+        ctk.CTkLabel(text_col, text=subtitle, font=ctk.CTkFont(size=12), text_color=_TEXT_MUTED).pack(anchor="w", pady=(2, 0))
 
         if action_text and action_command:
             ctk.CTkButton(
                 header,
                 text=action_text,
                 command=action_command,
-                width=120,
-                height=38,
-                corner_radius=14,
+                width=102,
+                height=34,
+                corner_radius=12,
                 fg_color=_SURFACE,
                 hover_color=_SURFACE_ALT,
                 border_width=1,
@@ -325,7 +329,7 @@ class AutoBookApp(ctk.CTk):
 
     def _summary_row(self, items: list[tuple[str, str]]) -> None:
         row = ctk.CTkFrame(self.content, fg_color="transparent")
-        row.pack(fill="x", padx=28, pady=(0, 16))
+        row.pack(fill="x", padx=28, pady=(0, 10))
         columns = 2 if len(items) >= 4 else max(1, len(items))
         for col in range(columns):
             row.grid_columnconfigure(col, weight=1)
@@ -335,14 +339,14 @@ class AutoBookApp(ctk.CTk):
             grid_col = idx % columns
             card.grid(row=grid_row, column=grid_col, sticky="nsew", padx=6, pady=6)
             ctk.CTkLabel(card, text=label, font=ctk.CTkFont(size=12, weight="bold"), text_color=_TEXT_SOFT).pack(
-                anchor="w", padx=16, pady=(14, 4)
+                anchor="w", padx=14, pady=(10, 2)
             )
-            ctk.CTkLabel(card, text=value, font=ctk.CTkFont(size=24, weight="bold"), text_color=_TEXT).pack(
-                anchor="w", padx=16, pady=(0, 14)
+            ctk.CTkLabel(card, text=value, font=ctk.CTkFont(size=20, weight="bold"), text_color=_TEXT).pack(
+                anchor="w", padx=14, pady=(0, 10)
             )
 
     def _make_surface(self, parent: Any, pady: tuple[int, int] = (0, 0)) -> ctk.CTkFrame:
-        frame = ctk.CTkFrame(parent, fg_color=_SURFACE, corner_radius=20, border_width=1, border_color=_CARD_BORDER)
+        frame = ctk.CTkFrame(parent, fg_color=_SURFACE, corner_radius=18, border_width=1, border_color=_CARD_BORDER)
         frame.pack(fill="x", padx=28, pady=pady)
         return frame
 
@@ -450,20 +454,12 @@ class AutoBookApp(ctk.CTk):
         self._clear_content()
         self._refresh_settings_cache()
 
-        self._create_header("Catalog Search", "Search public-domain and external sources, then filter and sort the results.")
-        self._summary_row(self._search_summary_items())
+        self._create_header("Catalog Search", "Find titles and stay in the result stream.")
 
-        panel = self._make_surface(self.content, (0, 14))
-        ctk.CTkLabel(panel, text="Search catalog", font=ctk.CTkFont(size=16, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=22, pady=(18, 4))
-        ctk.CTkLabel(
-            panel,
-            text="Filters apply instantly after a result set is loaded. Preferred source and format are preselected from settings.",
-            font=ctk.CTkFont(size=13),
-            text_color=_TEXT_MUTED,
-        ).pack(anchor="w", padx=22, pady=(0, 14))
+        panel = self._make_surface(self.content, (0, 8))
 
         search_row = ctk.CTkFrame(panel, fg_color="transparent")
-        search_row.pack(fill="x", padx=22, pady=(0, 14))
+        search_row.pack(fill="x", padx=18, pady=(14, 10))
         search_row.grid_columnconfigure(0, weight=1)
         self.search_entry = ctk.CTkEntry(
             search_row,
@@ -490,10 +486,36 @@ class AutoBookApp(ctk.CTk):
             command=self._do_search,
         ).grid(row=0, column=1, sticky="e")
 
+        toolbar_row = ctk.CTkFrame(panel, fg_color="transparent")
+        toolbar_row.pack(fill="x", padx=18, pady=(0, 10))
+        self.search_filters_visible = tk.BooleanVar(value=False)
+        ctk.CTkButton(
+            toolbar_row,
+            text="Advanced Filters",
+            width=140,
+            height=32,
+            corner_radius=12,
+            fg_color=_SURFACE_ALT,
+            hover_color=_CARD_BG,
+            border_width=1,
+            border_color=_CARD_BORDER,
+            text_color=_TEXT,
+            command=self._toggle_search_filters,
+        ).pack(side="left")
+        self.search_context_label = ctk.CTkLabel(
+            toolbar_row,
+            text="Source: all  |  Format: any  |  Sort: relevance",
+            font=ctk.CTkFont(size=11),
+            text_color=_TEXT_SOFT,
+            anchor="w",
+        )
+        self.search_context_label.pack(side="left", padx=(12, 0))
+
         filter_row = ctk.CTkFrame(panel, fg_color="transparent")
-        filter_row.pack(fill="x", padx=22, pady=(0, 18))
+        filter_row.pack(fill="x", padx=18, pady=(0, 10))
         for col in range(3):
             filter_row.grid_columnconfigure(col, weight=1)
+        self.search_filter_row = filter_row
         self.search_source_var = tk.StringVar(value=self.settings.get("preferred_source", "All Sources"))
         self.search_language_var = tk.StringVar(value="All Languages")
         self.search_format_var = tk.StringVar(value=self.settings.get("preferred_format", "Any"))
@@ -505,14 +527,37 @@ class AutoBookApp(ctk.CTk):
         self._make_filter(filter_row, 2, "Format", self.search_format_var, ["Any", "EPUB", "PDF"])
         self._make_filter(filter_row, 3, "Min rating", self.search_rating_var, ["Any rating", "3+", "4+"])
         self._make_filter(filter_row, 4, "Sort", self.search_sort_var, ["Relevance", "Rating", "Newest", "Title"])
+        self.search_filter_row.pack_forget()
+        self._update_search_context_label()
 
         self.inline_status = ctk.CTkLabel(self.content, text="Ready for search.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
-        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
         self.results_frame = ScrollableFrame(self.content, fg_color=_APP_BG)
-        self.results_frame.pack(fill="both", expand=True, padx=28, pady=(0, 18))
+        self.results_frame.pack(fill="both", expand=True, padx=28, pady=(0, 12))
         self._render_search_placeholder()
         self.search_entry.focus()
+
+    def _toggle_search_filters(self) -> None:
+        if not hasattr(self, "search_filter_row"):
+            return
+        visible = self.search_filters_visible.get()
+        if visible:
+            self.search_filter_row.pack_forget()
+            self.search_filters_visible.set(False)
+        else:
+            self.search_filter_row.pack(fill="x", padx=18, pady=(0, 10))
+            self.search_filters_visible.set(True)
+
+    def _update_search_context_label(self) -> None:
+        if hasattr(self, "search_context_label"):
+            self.search_context_label.configure(
+                text=(
+                    f"Source: {self.search_source_var.get().lower()}  |  "
+                    f"Format: {self.search_format_var.get().lower()}  |  "
+                    f"Sort: {self.search_sort_var.get().lower()}"
+                )
+            )
 
     def _make_filter(self, parent: ctk.CTkFrame, index: int, label: str, var: tk.StringVar, values: list[str]) -> None:
         group = ctk.CTkFrame(parent, fg_color="transparent")
@@ -532,7 +577,7 @@ class AutoBookApp(ctk.CTk):
             dropdown_hover_color=_SURFACE_ALT,
             text_color=_TEXT,
             dropdown_text_color=_TEXT,
-            command=lambda _value: self._render_filtered_search_results(),
+            command=lambda _value: (self._update_search_context_label(), self._render_filtered_search_results()),
         )
         combo.pack(fill="x")
 
@@ -583,6 +628,9 @@ class AutoBookApp(ctk.CTk):
         if not self.current_search_results:
             self._render_search_placeholder()
             return
+        hero = ctk.CTkFrame(self.results_frame.inner, fg_color=_CARD_BG, corner_radius=16, border_width=1, border_color=_CARD_BORDER)
+        hero.pack(fill="x", padx=2, pady=(2, 8))
+        ctk.CTkLabel(hero, text=f'{len(results)} results for "{query}"', font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(12, 12))
         if not results:
             self._render_no_results("No results match the selected filters.")
             return
@@ -824,11 +872,11 @@ class AutoBookApp(ctk.CTk):
         self.selected_book_ids = set()
         books = get_all_books()
         self._create_header("Library", "Search, filter and manage downloaded titles with favorites and collections.", "Refresh", self._show_library)
-        self._summary_row(self._library_summary_items(books))
 
-        controls = self._make_surface(self.content, (0, 14))
+        controls = self._make_surface(self.content, (0, 8))
         row = ctk.CTkFrame(controls, fg_color="transparent")
-        row.pack(fill="x", padx=22, pady=18)
+        row.pack(fill="x", padx=18, pady=(14, 10))
+        row.grid_columnconfigure(0, weight=1)
         self.library_search_var = tk.StringVar()
         self.library_collection_var = tk.StringVar(value="All Collections")
         self.library_format_var = tk.StringVar(value="All Formats")
@@ -837,6 +885,7 @@ class AutoBookApp(ctk.CTk):
         self.library_status_var = tk.StringVar(value="All Statuses")
         self.library_view_var = tk.StringVar(value=self.settings.get("library_view", "List"))
         self.library_bulk_mode_var = tk.BooleanVar(value=False)
+        self.library_advanced_visible = tk.BooleanVar(value=False)
 
         search_entry = ctk.CTkEntry(
             row,
@@ -848,19 +897,46 @@ class AutoBookApp(ctk.CTk):
             fg_color=_CARD_BG,
             text_color=_TEXT,
         )
-        search_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        search_entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         search_entry.bind("<KeyRelease>", lambda _event: self._refresh_library_results())
+        ctk.CTkButton(
+            row,
+            text="Filters",
+            width=94,
+            height=34,
+            fg_color=_SURFACE_ALT,
+            hover_color=_CARD_BG,
+            border_width=1,
+            border_color=_CARD_BORDER,
+            text_color=_TEXT,
+            command=self._toggle_library_advanced,
+        ).grid(row=0, column=1, padx=(0, 8))
+        ctk.CTkOptionMenu(
+            row,
+            values=["List", "Grid"],
+            variable=self.library_view_var,
+            width=100,
+            height=34,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+            command=lambda _value: self._refresh_library_results(),
+        ).grid(row=0, column=2)
 
         filter_frame = ctk.CTkFrame(controls, fg_color="transparent")
-        filter_frame.pack(fill="x", padx=22, pady=(0, 18))
+        filter_frame.pack(fill="x", padx=18, pady=(0, 10))
         for col in range(3):
             filter_frame.grid_columnconfigure(col, weight=1)
+        self.library_filter_frame = filter_frame
         self._make_library_filter(filter_frame, 0, "Collection", self.library_collection_var, ["All Collections", *list_collections()])
         self._make_library_filter(filter_frame, 1, "Format", self.library_format_var, ["All Formats", "EPUB", "PDF"])
         sources = sorted({book.get("source", "") for book in books if book.get("source")})
         self._make_library_filter(filter_frame, 2, "Source", self.library_source_var, ["All Sources", *sources])
         self._make_library_filter(filter_frame, 3, "Status", self.library_status_var, ["All Statuses", "Unread", "Reading", "Completed"])
-        self._make_library_filter(filter_frame, 4, "View", self.library_view_var, ["List", "Grid"])
         ctk.CTkCheckBox(
             filter_frame,
             text="Favorites only",
@@ -881,31 +957,49 @@ class AutoBookApp(ctk.CTk):
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
         ).grid(row=2, column=0, sticky="w", padx=(8, 0), pady=(8, 0))
+        self.library_filter_frame.pack_forget()
 
         bulk_row = ctk.CTkFrame(controls, fg_color="transparent")
-        bulk_row.pack(fill="x", padx=22, pady=(0, 18))
+        bulk_row.pack(fill="x", padx=18, pady=(0, 10))
+        self.library_bulk_row = bulk_row
         self.bulk_status_label = ctk.CTkLabel(bulk_row, text="0 selected", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT)
         self.bulk_status_label.pack(side="left", padx=(0, 14))
         ctk.CTkButton(bulk_row, text="Favorite Selected", width=138, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_mark_favorite).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Set Reading", width=118, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_set_reading).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Add Collection", width=122, height=34, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, text_color=_TEXT, command=self._bulk_add_collection).pack(side="left", padx=(0, 8))
         ctk.CTkButton(bulk_row, text="Remove Selected", width=132, height=34, fg_color=_DANGER, hover_color=_DANGER_HOVER, text_color=_TEXT, command=self._bulk_remove_books).pack(side="left")
+        self.library_bulk_row.pack_forget()
 
         recommendations = get_recommendations(limit=4)
         if recommendations:
             rec_panel = ctk.CTkFrame(controls, fg_color=_CARD_BG, corner_radius=16, border_width=1, border_color=_CARD_BORDER)
-            rec_panel.pack(fill="x", padx=22, pady=(0, 18))
-            ctk.CTkLabel(rec_panel, text="Recommended from your library", font=ctk.CTkFont(size=14, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=16, pady=(14, 4))
+            rec_panel.pack(fill="x", padx=18, pady=(0, 10))
+            self.library_recommendations_panel = rec_panel
+            ctk.CTkLabel(rec_panel, text="Recommended from your library", font=ctk.CTkFont(size=14, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=16, pady=(12, 4))
             rec_row = ctk.CTkFrame(rec_panel, fg_color="transparent")
             rec_row.pack(fill="x", padx=16, pady=(0, 14))
             for book in recommendations:
                 self._make_badge(rec_row, book.get("title", "Unknown")[:24], _SURFACE_ALT)
+            self.library_recommendations_panel.pack_forget()
+        else:
+            self.library_recommendations_panel = None
 
         self.inline_status = ctk.CTkLabel(self.content, text="", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
-        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
         self.library_results = ScrollableFrame(self.content, fg_color=_APP_BG)
-        self.library_results.pack(fill="both", expand=True, padx=28, pady=(0, 18))
+        self.library_results.pack(fill="both", expand=True, padx=28, pady=(0, 12))
         self._refresh_library_results()
+
+    def _toggle_library_advanced(self) -> None:
+        if not hasattr(self, "library_filter_frame"):
+            return
+        visible = self.library_advanced_visible.get()
+        if visible:
+            self.library_filter_frame.pack_forget()
+            self.library_advanced_visible.set(False)
+        else:
+            self.library_filter_frame.pack(fill="x", padx=18, pady=(0, 10))
+            self.library_advanced_visible.set(True)
 
     def _make_library_filter(self, parent: ctk.CTkFrame, index: int, label: str, var: tk.StringVar, values: list[str]) -> None:
         group = ctk.CTkFrame(parent, fg_color="transparent")
@@ -951,6 +1045,16 @@ class AutoBookApp(ctk.CTk):
         update_settings(library_view=view)
         self._refresh_settings_cache()
         self._update_bulk_status()
+        if hasattr(self, "library_bulk_row"):
+            if self.library_bulk_mode_var.get():
+                self.library_bulk_row.pack(fill="x", padx=18, pady=(0, 10))
+            else:
+                self.library_bulk_row.pack_forget()
+        if getattr(self, "library_recommendations_panel", None) is not None:
+            if not books and self.library_recommendations_panel is not None:
+                self.library_recommendations_panel.pack(fill="x", padx=18, pady=(0, 10))
+            else:
+                self.library_recommendations_panel.pack_forget()
         self._set_status(f"{len(books)} library item(s).")
 
         if not books:
@@ -1317,14 +1421,14 @@ class AutoBookApp(ctk.CTk):
         self._create_header("Download History", "Review successful and failed download attempts with timestamps and messages.", "Refresh", self._show_history)
         self._summary_row(self._history_summary_items(history))
         self.inline_status = ctk.CTkLabel(self.content, text=f"{len(history)} history event(s).", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
-        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
         if not history:
             self._show_empty_state("No download history yet", "Every download success or failure will appear here so you can quickly inspect what happened.")
             return
 
         scroll = ScrollableFrame(self.content, fg_color=_APP_BG)
-        scroll.pack(fill="both", expand=True, padx=28, pady=(0, 18))
+        scroll.pack(fill="both", expand=True, padx=28, pady=(0, 12))
         for entry in history:
             card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
             card.pack(fill="x", padx=2, pady=6)
@@ -1337,6 +1441,43 @@ class AutoBookApp(ctk.CTk):
             badge = ctk.CTkFrame(card, fg_color="transparent")
             badge.pack(side="right", padx=18, pady=16)
             self._make_badge(badge, entry.get("status", "unknown").upper(), _SUCCESS if entry.get("status") == "success" else _DANGER)
+
+    def _show_analytics(self) -> None:
+        self._set_active_nav("analytics")
+        self._clear_content()
+        analytics = get_library_analytics()
+        self._create_header("Analytics", "Inspect format, source, language and reading-state distribution across the local library.")
+        self._summary_row(
+            [
+                ("Books", str(analytics.get("total_books", 0))),
+                ("Favorites", str(analytics.get("favorites", 0))),
+                ("Collections", str(analytics.get("collections", 0))),
+                ("Tags", str(analytics.get("tags", 0))),
+            ]
+        )
+        self.inline_status = ctk.CTkLabel(self.content, text="Analytics are calculated from the local library metadata.", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
+
+        scroll = ScrollableFrame(self.content, fg_color=_APP_BG)
+        scroll.pack(fill="both", expand=True, padx=28, pady=(0, 12))
+        sections = [
+            ("By Source", analytics.get("by_source", {})),
+            ("By Format", analytics.get("by_format", {})),
+            ("By Reading Status", analytics.get("by_status", {})),
+            ("By Language", analytics.get("by_language", {})),
+        ]
+        for title, values in sections:
+            card = ctk.CTkFrame(scroll.inner, corner_radius=20, fg_color=_SURFACE, border_width=1, border_color=_CARD_BORDER)
+            card.pack(fill="x", padx=2, pady=6)
+            ctk.CTkLabel(card, text=title, font=ctk.CTkFont(size=18, weight="bold"), text_color=_TEXT).pack(anchor="w", padx=18, pady=(16, 12))
+            if not values:
+                ctk.CTkLabel(card, text="No data yet.", font=ctk.CTkFont(size=13), text_color=_TEXT_MUTED).pack(anchor="w", padx=18, pady=(0, 16))
+                continue
+            for key, count in values.items():
+                row = ctk.CTkFrame(card, fg_color="transparent")
+                row.pack(fill="x", padx=18, pady=4)
+                ctk.CTkLabel(row, text=str(key), font=ctk.CTkFont(size=13), text_color=_TEXT).pack(side="left")
+                ctk.CTkLabel(row, text=str(count), font=ctk.CTkFont(size=13, weight="bold"), text_color=_TEXT_MUTED).pack(side="right")
 
     # Devices page
 
@@ -1515,15 +1656,16 @@ class AutoBookApp(ctk.CTk):
             ]
         )
 
-        panel = self._make_surface(self.content, (0, 16))
+        panel = self._make_surface(self.content, (0, 10))
         self.settings_format_var = tk.StringVar(value=self.settings.get("preferred_format", "Any"))
         self.settings_source_var = tk.StringVar(value=self.settings.get("preferred_source", "All Sources"))
         self.settings_collection_var = tk.StringVar(value=self.settings.get("default_collection", ""))
         self.settings_device_subdir_var = tk.StringVar(value=self.settings.get("device_subdir", ""))
         self.settings_open_library_var = tk.BooleanVar(value=bool(self.settings.get("open_library_after_download", True)))
+        self.settings_organize_var = tk.StringVar(value=self.settings.get("auto_organize_by", "None"))
 
         form = ctk.CTkFrame(panel, fg_color="transparent")
-        form.pack(fill="x", padx=22, pady=22)
+        form.pack(fill="x", padx=18, pady=16)
         self._make_settings_field(form, "Preferred download format", ctk.CTkOptionMenu(
             form,
             values=["Any", "EPUB", "PDF"],
@@ -1562,6 +1704,18 @@ class AutoBookApp(ctk.CTk):
             border_color=_CARD_BORDER,
             text_color=_TEXT,
         ))
+        self._make_settings_field(form, "Auto organize books by", ctk.CTkOptionMenu(
+            form,
+            values=["None", "Author", "Format", "Source"],
+            variable=self.settings_organize_var,
+            fg_color=_CARD_BG,
+            button_color=_ACCENT,
+            button_hover_color=_ACCENT_HOVER,
+            dropdown_fg_color=_SURFACE,
+            dropdown_hover_color=_SURFACE_ALT,
+            text_color=_TEXT,
+            dropdown_text_color=_TEXT,
+        ))
 
         ctk.CTkCheckBox(
             panel,
@@ -1571,15 +1725,18 @@ class AutoBookApp(ctk.CTk):
             fg_color=_ACCENT,
             hover_color=_ACCENT_HOVER,
             border_color=_CARD_BORDER,
-        ).pack(anchor="w", padx=22, pady=(0, 18))
+        ).pack(anchor="w", padx=18, pady=(0, 12))
 
         action_row = ctk.CTkFrame(panel, fg_color="transparent")
-        action_row.pack(fill="x", padx=22, pady=(0, 22))
+        action_row.pack(fill="x", padx=18, pady=(0, 16))
         ctk.CTkButton(action_row, text="Save Settings", width=150, height=38, fg_color=_ACCENT, hover_color=_ACCENT_HOVER, corner_radius=14, text_color=_TEXT, command=self._save_settings).pack(side="left", padx=(0, 10))
         ctk.CTkButton(action_row, text="Open Log File", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._open_log_file).pack(side="left")
+        ctk.CTkButton(action_row, text="Export Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._export_snapshot).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(action_row, text="Import Snapshot", width=140, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._import_snapshot).pack(side="left", padx=(10, 0))
+        ctk.CTkButton(action_row, text="Run Organize", width=130, height=38, fg_color=_SURFACE_ALT, hover_color=_CARD_BG, border_width=1, border_color=_CARD_BORDER, corner_radius=14, text_color=_TEXT, command=self._run_auto_organize).pack(side="left", padx=(10, 0))
 
         self.inline_status = ctk.CTkLabel(self.content, text=f"Log file: {LOG_FILE}", font=ctk.CTkFont(size=12), text_color=_TEXT_SOFT, anchor="w")
-        self.inline_status.pack(fill="x", padx=30, pady=(0, 6))
+        self.inline_status.pack(fill="x", padx=30, pady=(0, 4))
 
     def _make_settings_field(self, parent: ctk.CTkFrame, label: str, widget: Any) -> None:
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1595,12 +1752,47 @@ class AutoBookApp(ctk.CTk):
                 default_collection=self.settings_collection_var.get().strip(),
                 device_subdir=self.settings_device_subdir_var.get().strip(),
                 open_library_after_download=bool(self.settings_open_library_var.get()),
+                auto_organize_by=self.settings_organize_var.get(),
             )
             self._refresh_settings_cache()
             self._set_status("Settings saved.")
         except Exception:
             log_exception("Settings save failed")
             self._set_status("Settings save failed. Check the log for details.")
+
+    def _export_snapshot(self) -> None:
+        try:
+            path = export_library_snapshot()
+            log_info(f"Library snapshot exported path={str(path)!r}")
+            self._set_status(f"Snapshot exported to {path.name}.")
+        except Exception:
+            log_exception("Snapshot export failed")
+            self._set_status("Snapshot export failed. Check the log for details.")
+
+    def _import_snapshot(self) -> None:
+        dialog = ctk.CTkInputDialog(text="Enter the full path to an export JSON file.", title="Import Snapshot")
+        path = dialog.get_input()
+        if not path:
+            return
+        try:
+            result = import_library_snapshot(path.strip())
+            log_info(f"Snapshot import completed imported={result['imported']} skipped={result['skipped']}")
+            self._set_status(f"Imported {result['imported']} book(s), skipped {result['skipped']}.")
+        except Exception as exc:
+            log_exception("Snapshot import failed")
+            self._set_status(f"Snapshot import failed: {exc}")
+
+    def _run_auto_organize(self) -> None:
+        mode = self.settings_organize_var.get()
+        try:
+            moved = organize_library_files(mode)
+            update_settings(auto_organize_by=mode)
+            self._refresh_settings_cache()
+            log_info(f"Auto organize completed mode={mode!r} moved={moved}")
+            self._set_status(f"Auto organize complete. {moved} file(s) moved.")
+        except Exception:
+            log_exception("Auto organize failed")
+            self._set_status("Auto organize failed. Check the log for details.")
 
     def _open_log_file(self) -> None:
         try:
@@ -1617,3 +1809,4 @@ class AutoBookApp(ctk.CTk):
 
 if __name__ == "__main__":
     AutoBookApp().mainloop()
+    organize_library_files,

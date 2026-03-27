@@ -71,3 +71,43 @@ requests.exceptions.ConnectionError: HTTPSConnectionPool(host='libgen.vg', port=
 2026-03-27 22:10:41,710 | INFO | MainThread | Logging initialized
 2026-03-27 22:10:58,331 | INFO | autobook-worker | Running search for query='george orwell'
 2026-03-27 22:13:53,202 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:17:40,502 | INFO | MainThread | Logging initialized
+2026-03-27 22:17:57,952 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:18:02,927 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:18:03,440 | ERROR | ThreadPoolExecutor-0_0 | Gutenberg search failed for query='animal farm'
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/search.py", line 89, in _search_gutenberg
+    resp.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://www.gutenberg.org/ebooks/search/?query=animal+farm&submit_search=Go%21
+2026-03-27 22:18:08,412 | ERROR | ThreadPoolExecutor-2_0 | Gutenberg search failed for query='animal farm'
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/app/search.py", line 89, in _search_gutenberg
+    resp.raise_for_status()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/nihosh/Projects/AutoBook_nihos/.venv/lib/python3.14/site-packages/requests/models.py", line 1026, in raise_for_status
+    raise HTTPError(http_error_msg, response=self)
+requests.exceptions.HTTPError: 504 Server Error: Gateway Time-out for url: https://www.gutenberg.org/ebooks/search/?query=animal+farm&submit_search=Go%21
+2026-03-27 22:22:25,959 | INFO | MainThread | Logging initialized
+2026-03-27 22:23:24,252 | INFO | MainThread | Logging initialized
+2026-03-27 22:23:31,628 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:25:01,888 | INFO | MainThread | Logging initialized
+2026-03-27 22:25:09,046 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:25:35,003 | INFO | autobook-worker | Downloaded book title='Animal Farm' format='epub'
+2026-03-27 22:28:23,885 | INFO | MainThread | Logging initialized
+2026-03-27 22:28:33,051 | INFO | autobook-worker | Running search for query='animal farm'
+2026-03-27 22:28:43,477 | INFO | autobook-worker | Downloaded book title='Animal Farm' format='epub'
+2026-03-27 22:31:59,826 | INFO | MainThread | Logging initialized
+2026-03-27 22:32:20,757 | INFO | autobook-worker | Running search for query='prince'
+2026-03-27 22:33:07,534 | INFO | autobook-worker | Running search for query='little prince'
+2026-03-27 22:33:55,194 | INFO | autobook-worker | Running search for query='little prince'
+2026-03-27 22:33:57,876 | INFO | autobook-worker | Running search for query='little prince'
+2026-03-27 22:34:11,949 | INFO | autobook-worker | Downloaded book title='The Little Prince Read-Aloud Storybook' format='epub'
+2026-03-27 22:34:22,570 | ERROR | MainThread | Unhandled exception
+Traceback (most recent call last):
+  File "/Users/nihosh/Projects/AutoBook_nihos/main.py", line 1812, in <module>
+    organize_library_files,
+    ^^^^^^^^^^^^^^^^^^^^^^
+NameError: name 'organize_library_files' is not defined

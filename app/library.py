@@ -16,6 +16,8 @@ METADATA_FILE = LIBRARY_DIR / "_metadata.json"
 SETTINGS_FILE = LIBRARY_DIR / "_settings.json"
 HISTORY_FILE = LIBRARY_DIR / "_history.json"
 TRANSFER_HISTORY_FILE = LIBRARY_DIR / "_transfer_history.json"
+EXPORT_DIR = LIBRARY_DIR / "exports"
+EXPORT_DIR.mkdir(exist_ok=True)
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "preferred_format": "Any",
@@ -24,6 +26,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "default_collection": "",
     "open_library_after_download": True,
     "library_view": "List",
+    "auto_organize_by": "None",
 }
 
 
@@ -399,3 +402,95 @@ def get_recommendations(limit: int = 6) -> list[dict[str, Any]]:
         ranked.append((score, book))
     ranked.sort(key=lambda item: (item[0], item[1].get("downloaded_at", "")), reverse=True)
     return [book for _, book in ranked[:limit]]
+
+
+def get_library_analytics() -> dict[str, Any]:
+    books = _load_metadata()
+    by_source: dict[str, int] = {}
+    by_format: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    by_language: dict[str, int] = {}
+    for book in books:
+        by_source[book.get("source", "Unknown")] = by_source.get(book.get("source", "Unknown"), 0) + 1
+        by_format[book.get("format", "").upper() or "Unknown"] = by_format.get(book.get("format", "").upper() or "Unknown", 0) + 1
+        by_status[book.get("reading_status", "Unread")] = by_status.get(book.get("reading_status", "Unread"), 0) + 1
+        by_language[book.get("language", "Unknown") or "Unknown"] = by_language.get(book.get("language", "Unknown") or "Unknown", 0) + 1
+    return {
+        "total_books": len(books),
+        "favorites": sum(1 for book in books if book.get("favorite")),
+        "collections": len(list_collections()),
+        "tags": len(list_tags()),
+        "by_source": dict(sorted(by_source.items(), key=lambda item: item[1], reverse=True)),
+        "by_format": dict(sorted(by_format.items(), key=lambda item: item[1], reverse=True)),
+        "by_status": dict(sorted(by_status.items(), key=lambda item: item[1], reverse=True)),
+        "by_language": dict(sorted(by_language.items(), key=lambda item: item[1], reverse=True)),
+    }
+
+
+def export_library_snapshot() -> Path:
+    payload = {
+        "exported_at": _now_iso(),
+        "settings": get_settings(),
+        "books": _load_metadata(),
+        "download_history": get_download_history(),
+        "transfer_history": get_transfer_history(),
+    }
+    path = EXPORT_DIR / f"autobook_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    _write_json(path, payload)
+    return path
+
+
+def import_library_snapshot(path_str: str) -> dict[str, int]:
+    payload = _read_json(Path(path_str), {})
+    if not isinstance(payload, dict):
+        raise ValueError("Import file is not a valid export payload.")
+
+    incoming_books = payload.get("books", [])
+    imported = 0
+    skipped = 0
+    existing = _load_metadata()
+    existing_keys = {(book.get("title", "").lower(), book.get("author", "").lower(), book.get("filename", "").lower()) for book in existing}
+    for entry in incoming_books if isinstance(incoming_books, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        key = (entry.get("title", "").lower(), entry.get("author", "").lower(), entry.get("filename", "").lower())
+        if key in existing_keys:
+            skipped += 1
+            continue
+        existing.append(_normalise_book(entry))
+        existing_keys.add(key)
+        imported += 1
+    _save_metadata(existing)
+    return {"imported": imported, "skipped": skipped}
+
+
+def organize_library_files(mode: str = "None") -> int:
+    if mode == "None":
+        return 0
+    metadata = _load_metadata()
+    moved = 0
+    for idx, book in enumerate(metadata):
+        current_path = LIBRARY_DIR / book["filename"]
+        if not current_path.exists():
+            continue
+        if mode == "Author":
+            folder_name = book.get("author", "Unknown Author").strip() or "Unknown Author"
+        elif mode == "Format":
+            folder_name = book.get("format", "unknown").upper() or "UNKNOWN"
+        else:
+            folder_name = book.get("source", "Unknown Source").strip() or "Unknown Source"
+        safe_folder = "".join(ch for ch in folder_name if ch.isalnum() or ch in " -_").strip() or "Misc"
+        target_dir = LIBRARY_DIR / safe_folder
+        target_dir.mkdir(exist_ok=True)
+        target_path = target_dir / current_path.name
+        if target_path == current_path:
+            continue
+        if target_path.exists():
+            continue
+        current_path.rename(target_path)
+        metadata[idx]["filename"] = str(target_path.relative_to(LIBRARY_DIR))
+        metadata[idx]["updated_at"] = _now_iso()
+        moved += 1
+    if moved:
+        _save_metadata(metadata)
+    return moved
