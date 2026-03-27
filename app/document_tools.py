@@ -166,7 +166,7 @@ def export_library_web_preview() -> Path:
     json_path.write_text(json.dumps(payload, indent=2))
     html_path = companion_dir / "index.html"
     cards = "\n".join(
-        f"<article class=\"book\"><h2>{book.get('title', 'Unknown')}</h2><p class=\"meta\">{book.get('author', '')}</p><p>{book.get('summary', '')}</p></article>"
+        f"<article class=\"book\" data-search=\"{(book.get('title', '') + ' ' + book.get('author', '') + ' ' + book.get('summary', '')).lower()}\"><h2>{book.get('title', 'Unknown')}</h2><p class=\"meta\">{book.get('author', '')}</p><p>{book.get('summary', '')}</p></article>"
         for book in books[:12]
     ) or "<p>No books in the local library yet.</p>"
     html_path.write_text(
@@ -182,6 +182,7 @@ def export_library_web_preview() -> Path:
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-top:20px; }}
     .book {{ background:#111827; border:1px solid #273449; border-radius:14px; padding:16px; }}
     .meta {{ color:#93a4bc; font-size:14px; }}
+    input {{ width:100%; max-width:360px; background:#111827; color:#e5eef9; border:1px solid #273449; border-radius:12px; padding:12px 14px; margin-top:12px; }}
     a {{ color:#7db0ff; }}
   </style>
 </head>
@@ -189,10 +190,23 @@ def export_library_web_preview() -> Path:
   <div class="card">
     <h1>AutoBook Companion</h1>
     <p class="meta">Feed file: <code>{feed_path.name}</code></p>
+    <p class="meta">Showing {min(len(books), 12)} of {len(books)} books</p>
+    <input id="search" type="search" placeholder="Filter books by title, author or summary">
     <div class="grid">
       {cards}
     </div>
   </div>
+  <script>
+    const input = document.getElementById('search');
+    const cards = [...document.querySelectorAll('.book')];
+    input?.addEventListener('input', (event) => {{
+      const value = String(event.target.value || '').toLowerCase().trim();
+      cards.forEach((card) => {{
+        const haystack = card.dataset.search || '';
+        card.style.display = !value || haystack.includes(value) ? '' : 'none';
+      }});
+    }});
+  </script>
 </body>
 </html>
 """,

@@ -10,6 +10,7 @@
     .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-top:20px; }
     .book { background:#111827; border:1px solid #273449; border-radius:14px; padding:16px; }
     .meta { color:#93a4bc; font-size:14px; }
+    input { width:100%; max-width:360px; background:#111827; color:#e5eef9; border:1px solid #273449; border-radius:12px; padding:12px 14px; margin-top:12px; }
     a { color:#7db0ff; }
   </style>
 </head>
@@ -17,10 +18,23 @@
   <div class="card">
     <h1>AutoBook Companion</h1>
     <p class="meta">Feed file: <code>library_feed.json</code></p>
+    <p class="meta">Showing 2 of 2 books</p>
+    <input id="search" type="search" placeholder="Filter books by title, author or summary">
     <div class="grid">
-      <article class="book"><h2>Animal Farm</h2><p class="meta">George Orwell</p><p>Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...</p></article>
-<article class="book"><h2>The Little Prince Read-Aloud Storybook</h2><p class="meta">Antoine De Saint-Exupéry</p><p>External source file size: 4 MB</p></article>
+      <article class="book" data-search="animal farm george orwell nous sommes à la ferme, à la tombée de la nuit, alors que m.jones vient de rentrer du pub. il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient..."><h2>Animal Farm</h2><p class="meta">George Orwell</p><p>Nous sommes à la ferme, à la tombée de la nuit, alors que M.Jones vient de rentrer du pub. Il est ce soir bien trop éméché pour s'occuper de ses bêtes comme il convient...</p></article>
+<article class="book" data-search="the little prince read-aloud storybook antoine de saint-exupéry external source file size: 4 mb"><h2>The Little Prince Read-Aloud Storybook</h2><p class="meta">Antoine De Saint-Exupéry</p><p>External source file size: 4 MB</p></article>
     </div>
   </div>
+  <script>
+    const input = document.getElementById('search');
+    const cards = [...document.querySelectorAll('.book')];
+    input?.addEventListener('input', (event) => {
+      const value = String(event.target.value || '').toLowerCase().trim();
+      cards.forEach((card) => {
+        const haystack = card.dataset.search || '';
+        card.style.display = !value || haystack.includes(value) ? '' : 'none';
+      });
+    });
+  </script>
 </body>
 </html>
